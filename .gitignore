@@ -10,3 +10,6 @@ keys.txt
 .env
 .env.*
 .claude/
+
+# Local notes from the spandeck agent pointing at the private shared spec; never committed.
+docs/specs/spandeck-agentvault.md
