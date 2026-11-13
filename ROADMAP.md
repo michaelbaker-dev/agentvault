@@ -10,15 +10,14 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | 4 | Moving the vault | Put the vault on another machine without losing keys, tokens or settings |
 | 5 | Hot standby | Agents and apps keep working when the vault's machine goes down |
 | 6 | spandeck integration, phase 3: exposed-key reports | A key spandeck finds in a transcript lands on Needs attention |
-| 7 | spandeck integration, phase 4: approvals inside the Control Deck | Approving a station without leaving the Control Deck |
 
-## 1, 2, 6 and 7. spandeck integration
+## 1, 2 and 6. spandeck integration
 
 The contract, decisions and task lists are agreed with the spandeck project and kept there. In short:
 
 - **Phase 1:**
   - `/v1/status` identifies the vault (`"service":"agentvault"`) and shows non-owners only version and lock state.
-  - A station asks for a token, the owner approves it on the vault's own page with the passphrase, and the station collects it once.
+  - A station asks for a token, the owner approves it on the vault's own page, which opens as a small pop-up window from spandeck's Control Deck, shows the vault's address and closes itself. The station collects the token once. The vault is never embedded in another page, so its address is always visible where the passphrase is typed.
   - Requests are accepted only from the owner's devices and tagged machines.
   - Tokens are list + proxy only, read-only by default, pinned to the station's stable Tailscale ID, never see owner-only keys, and never expire by default.
   - A label header (`X-AgentVault-Actor`) is recorded and stripped before the provider call.
@@ -28,7 +27,6 @@ The contract, decisions and task lists are agreed with the spandeck project and 
   - The old token keeps working until the new one is first used, 24 hours at most, so a crash before spandeckd saves the new token can't lock the station out. Swapping again with the old token discards the unused new one.
   - spandeck alerts the owner when the vault's setting differs from the Control Deck's, or when someone else swapped the station's token.
 - **Phase 3:** `POST /v1/attention/report` takes a value seen in a transcript, matches it, discards it and always gives the same reply.
-- **Phase 4:** the approval page can be shown as a panel embedded in the Control Deck. The vault allows exactly the Control Deck's address to embed it and refuses every other site; its sign-in has to work inside the panel without weakening the protection against forged requests. The passphrase is still typed only into the vault's own panel.
 
 ## 3. Mac version
 
