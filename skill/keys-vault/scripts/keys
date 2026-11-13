@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Use the keys vault from a shell, without the key values passing through you.
+
+  keys setup                          save the vault address and a token (asked for without
+                                      showing it), check them, and connect Claude Code's MCP
+  keys check                          is the vault reachable, unlocked, and the token working?
+  keys list [WORD]                    keys this token may use (no values)
+  keys describe NAME                  what one key is for, its risk, and how the proxy reaches it
+  keys call NAME PATH [options]       call the key's provider through the vault's proxy
+      -X METHOD   -q 'a=1&b=2'   -H 'Name: value'   -d '{"json": 1}' | -d @file
+  keys run NAME[=ENVVAR] ... -- COMMAND [ARGS]
+                                      run COMMAND with keys in its environment; the values
+                                      are blanked out of its output (needs the read scope)
+
+Settings: KEYS_URL or ~/.config/keys/url; the token in ~/.config/keys/token
+(or the file named by KEYS_TOKEN_FILE). Standard library only.
+"""
+import getpass
+import json
+import os
+import shutil
+import ssl
+import subprocess
+import sys
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CONF = os.path.expanduser("~/.config/keys")
+MAX_SHOW = 100_000
+
+SETUP = f"""The keys vault isn't set up for this shell yet. The owner should, in their own terminal:
+  1. Create a token in the vault's web interface (Tokens > preset "Claude / agents"; add the
+     read scope only if programs should get raw values through `keys run`).
+  2. mkdir -p {CONF} && echo https://VAULT-HOST > {CONF}/url
+  3. (umask 077; cat > {CONF}/token)   then paste the token, press Enter and Ctrl-D.
+Never paste the token into a chat."""
+
+
+def die(msg, code=1):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def settings():
+    url = os.environ.get("KEYS_URL")
+    if not url and os.path.exists(f"{CONF}/url"):
+        url = open(f"{CONF}/url").read().strip()
+    token_file = os.environ.get("KEYS_TOKEN_FILE", f"{CONF}/token")
+    token = open(token_file).read().strip() if os.path.exists(token_file) else ""
+    if not url or not token:
+        die(SETUP)
+    return url.rstrip("/"), token
+
+
+def ssl_context():
+    ca = os.environ.get("KEYS_CA_FILE")  # only for test vaults with their own certificate
+    return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+
+
+def explain(status, body, url):
+    try:
+        msg = json.loads(body).get("error") or body
+    except Exception:
+        msg = body.strip()[:300]
+    hints = {
+        401: "the token is missing, wrong or revoked. Make a new one in the web interface (Tokens).",
+        403: "this token isn't allowed to do that.",
+        404: "no such key, or it's one only the owner can use (passwords, wallet keys, managers).",
+        409: "the vault hasn't been set up yet.",
+        503: f"the vault is locked. The owner unlocks it by signing in at {url}",
+    }
+    return f"Vault said {status}: {msg}" + (f"\n  ({hints[status]})" if status in hints else "")
+
+
+def request(method, path, body=None, headers=None, raw=False):
+    url, token = settings()
+    h = {"Authorization": f"Bearer {token}"}
+    h.update(headers or {})
+    data = None
+    if body is not None:
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        h.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url + path, data=data, headers=h, method=method)
+    try:
+        resp = urllib.request.urlopen(req, context=ssl_context(), timeout=120)
+        status, text, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        status, text, ctype = e.code, e.read(), e.headers.get("Content-Type", "")
+    except (urllib.error.URLError, OSError) as e:
+        die(f"Can't reach the vault at {url}: {getattr(e, 'reason', e)}\n  (Is this machine on the tailnet, and is the vault running?)")
+    if raw:
+        return status, text, ctype
+    if status >= 400:
+        die(explain(status, text.decode("utf-8", "replace"), url))
+    return json.loads(text or b"null")
+
+
+def cmd_check(_):
+    url, _ = settings()
+    try:
+        st = json.load(urllib.request.urlopen(url + "/v1/status", context=ssl_context(), timeout=15))
+    except Exception as e:
+        die(f"Can't reach the vault at {url}: {e}")
+    if not st.get("initialized"):
+        die("The vault is running but hasn't been set up yet.")
+    if st.get("sealed"):
+        die(f"The vault is locked. The owner unlocks it by signing in at {url}")
+    n = len(request("GET", "/v1/secrets")["secrets"])
+    print(f"OK: {url} is unlocked; this token can see {n} key(s).")
+
+
+def cmd_list(args):
+    rows = request("GET", "/v1/secrets")["secrets"]
+    word = (args[0] if args else "").lower()
+    rows = [r for r in rows if word in (r["name"] + " " + (r.get("description") or "") + " " + (r.get("provider_name") or "")).lower()]
+    if not rows:
+        print("No keys" + (f" matching '{word}'" if word else "") + " that this token may use.")
+        return
+    for r in rows:
+        flags = [r.get("provider_name") or "unknown provider", f"risk {r.get('risk') or '?'}"]
+        flags.append("proxy ready" if r.get("proxy_ready") else "no proxy target")
+        if r.get("exposed"):
+            flags.append("EXPOSED: should be replaced")
+        status = ((r.get("facts") or {}).get("verification") or {}).get("status")
+        if status and status != "valid":
+            flags.append(f"last check: {status}")
+        print(f"{r['name']}  ({', '.join(flags)})")
+        if r.get("description"):
+            print(f"    {r['description']}")
+
+
+def cmd_describe(args):
+    if len(args) != 1:
+        die("usage: keys describe NAME")
+    m = request("GET", f"/v1/secrets/{urllib.parse.quote(args[0], safe='')}")
+    keep = ["name", "provider_name", "kind", "description", "risk", "risk_reason", "notes", "tags", "proxy_target",
+            "docs_url", "fields", "parts", "expires_at", "exposed", "last_used_at", "use_count"]
+    out = {k: m.get(k) for k in keep if m.get(k) not in (None, "", [], {})}
+    v = (m.get("facts") or {}).get("verification")
+    if v:
+        out["verification"] = {k: v.get(k) for k in ("status", "result", "reason", "checked_at") if v.get(k)}
+    print(json.dumps(out, indent=2))
+
+
+def refused_by_vault(status, text):
+    """The vault's own refusals are exactly {"error": "<message>"}; provider
+    errors pass through untouched and look different."""
+    if status < 400:
+        return False
+    try:
+        j = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(j, dict) and list(j) == ["error"] and isinstance(j["error"], str)
+
+
+def cmd_call(args):
+    if len(args) < 2:
+        die("usage: keys call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
+    name, path, rest = args[0], args[1], args[2:]
+    method, query, headers, body = "GET", "", {}, None
+    i = 0
+    while i < len(rest):
+        flag = rest[i]
+        if i + 1 >= len(rest):
+            die(f"{flag} needs a value")
+        val = rest[i + 1]
+        if flag == "-X":
+            method = val.upper()
+        elif flag == "-q":
+            query = val.lstrip("?")
+        elif flag == "-H":
+            k, _, v = val.partition(":")
+            headers[k.strip()] = v.strip()
+        elif flag == "-d":
+            body = open(val[1:], "rb").read() if val.startswith("@") else val.encode()
+            if method == "GET":
+                method = "POST"
+        else:
+            die(f"unknown option {flag}")
+        i += 2
+    if body is not None and not any(k.lower() == "content-type" for k in headers):
+        try:
+            json.loads(body)
+            headers["Content-Type"] = "application/json"
+        except ValueError:
+            pass
+    target = f"/v1/proxy/{urllib.parse.quote(name, safe='')}/{path.lstrip('/')}" + (f"?{query}" if query else "")
+    status, text, ctype = request(method, target, body=body, headers=headers, raw=True)
+    if refused_by_vault(status, text):
+        die(explain(status, text.decode("utf-8", "replace"), settings()[0]))
+    print(f"HTTP {status}  {ctype}")
+    shown = text[:MAX_SHOW].decode("utf-8", "replace")
+    if "json" in ctype:
+        try:
+            shown = json.dumps(json.loads(text), indent=2)[:MAX_SHOW]
+        except ValueError:
+            pass
+    print(shown)
+    if len(text) > MAX_SHOW:
+        print(f"\n[truncated: {len(text)} bytes in all]")
+    sys.exit(0 if status < 400 else 2)
+
+
+def cmd_run(args):
+    if "--" not in args or args.index("--") == 0 or args.index("--") == len(args) - 1:
+        die("usage: keys run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
+    split = args.index("--")
+    wanted, command = args[:split], args[split + 1:]
+    env, secrets = dict(os.environ), []
+    for item in wanted:
+        name, _, var = item.partition("=")
+        var = var or name
+        r = request("GET", f"/v1/secrets/{urllib.parse.quote(name, safe='')}/value")
+        env[var] = r["value"]
+        secrets.append(r["value"])
+        for part, value in (r.get("parts") or {}).items():
+            env[f"{var}_{part.upper()}"] = value
+            secrets.append(value)
+    needles = sorted({s.encode() for s in secrets if len(s) >= 4}, key=len, reverse=True)
+
+    def blank(line):
+        for n in needles:
+            line = line.replace(n, b"[redacted by keys]")
+        return line
+
+    def pump(src, dst):
+        for line in iter(src.readline, b""):
+            dst.write(blank(line))
+            dst.flush()
+
+    try:
+        child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        die(f"command not found: {command[0]}")
+    threads = [threading.Thread(target=pump, args=(child.stdout, sys.stdout.buffer)),
+               threading.Thread(target=pump, args=(child.stderr, sys.stderr.buffer))]
+    for t in threads:
+        t.start()
+    code = child.wait()
+    for t in threads:
+        t.join()
+    sys.exit(code)
+
+
+def cmd_setup(args):
+    """Asks for the token without echoing it, so it never lands in shell
+    history or a chat, checks it, saves it and registers the MCP server."""
+    no_mcp = "--no-mcp" in args
+    saved = open(f"{CONF}/url").read().strip() if os.path.exists(f"{CONF}/url") else ""
+    default = os.environ.get("KEYS_URL") or saved
+    url = input(f"Vault address [{default}]: " if default else "Vault address (https://...): ").strip() or default
+    if not url.startswith("https://"):
+        die("The address should start with https://")
+    url = url.rstrip("/")
+    token = getpass.getpass("Token from the vault's Tokens page (not shown): ").strip()
+    if not token.startswith("kt_"):
+        die("That doesn't look like a vault token (they start with kt_). Nothing was saved.")
+
+    req = urllib.request.Request(url + "/v1/secrets", headers={"Authorization": f"Bearer {token}"})
+    try:
+        n = len(json.load(urllib.request.urlopen(req, context=ssl_context(), timeout=30))["secrets"])
+    except urllib.error.HTTPError as e:
+        die(explain(e.code, e.read().decode("utf-8", "replace"), url) + "\nNothing was saved.")
+    except (urllib.error.URLError, OSError) as e:
+        die(f"Can't reach the vault at {url}: {getattr(e, 'reason', e)}. Nothing was saved.")
+
+    os.makedirs(CONF, mode=0o700, exist_ok=True)
+    with open(f"{CONF}/url", "w") as f:
+        f.write(url + "\n")
+    path = os.environ.get("KEYS_TOKEN_FILE", f"{CONF}/token")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    print(f"Saved. The token works and can use {n} key(s).")
+
+    claude = shutil.which("claude")
+    if no_mcp or not claude:
+        if not no_mcp:
+            print("Claude Code isn't installed here, so MCP wasn't set up. The helper works on its own.")
+        return
+    # Replace any earlier registration; output is hidden because it can echo the header.
+    subprocess.run([claude, "mcp", "remove", "--scope", "user", "keys"], capture_output=True)
+    r = subprocess.run([claude, "mcp", "add", "--transport", "http", "--scope", "user", "keys", url + "/mcp",
+                        "--header", f"Authorization: Bearer {token}"], capture_output=True, text=True)
+    token = ""
+    if r.returncode != 0:
+        die("Saving worked, but adding the MCP server to Claude Code failed. Try again, or use the helper on its own.")
+    print("Claude Code's MCP server 'keys' is set up for all your projects.")
+    print("Restart Claude Code to load it (in a session: exit, then run `claude --continue`).")
+
+
+COMMANDS = {"setup": cmd_setup, "check": cmd_check, "list": cmd_list, "describe": cmd_describe, "call": cmd_call, "run": cmd_run}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print(__doc__.strip())
+        sys.exit(0 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help") else 1)
+    COMMANDS[sys.argv[1]](sys.argv[2:])

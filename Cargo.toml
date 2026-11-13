@@ -1,0 +1,35 @@
+[package]
+name = "keys"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+argon2 = "0.6.0"
+aws-lc-rs = "1.18.2"
+axum = "0.8.9"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+chacha20poly1305 = "0.11.0"
+clap = { version = "4.6.7", features = ["derive"] }
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+hex = "0.4.3"
+libc = "0.2.191"
+percent-encoding = "2.3.2"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream", "query"] }
+rpassword = "7.5.4"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+tokio = { version = "1.53.3", features = ["full"] }
+toml = "1.1.8"
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+url = "2.5.8"
+zeroize = { version = "1.9.1", features = ["derive"] }

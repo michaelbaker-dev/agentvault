@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh the keys vault's Tailscale HTTPS certificate
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/keys/refresh-cert

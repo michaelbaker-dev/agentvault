@@ -1,0 +1,101 @@
+#!/bin/sh
+# Makes the vault unlock itself after a restart or reboot.
+#
+#   sudo /usr/local/lib/keys/auto-unlock        turn it on, or update it after
+#                                               changing your passphrase
+#   sudo /usr/local/lib/keys/auto-unlock off    go back to unlocking by hand
+#
+# Your passphrase is stored encrypted as a systemd credential, readable only by
+# root. The script restarts the vault and checks it really unlocked; if not,
+# it puts everything back the way it was.
+set -eu
+[ "$(id -u)" = 0 ] || { echo "Run it with sudo." >&2; exit 1; }
+
+UNIT=/etc/systemd/system/keys.service
+CRED=/etc/keys/passphrase.cred
+CONF=/etc/keys/config.toml
+[ -f "$UNIT" ] && [ -f "$CONF" ] || { echo "The vault isn't installed yet: run deploy/install.sh first." >&2; exit 1; }
+
+HOST=$(sed -n 's/^hostname *= *"\(.*\)"/\1/p' "$CONF")
+LISTEN=$(sed -n 's/^listen *= *"\(.*\)"/\1/p' "$CONF")
+IP=${LISTEN%:*}
+PORT=${LISTEN##*:}
+URL="https://$HOST"
+[ "$PORT" = 443 ] || URL="$URL:$PORT"
+
+# Prints "sealed", "unlocked", "new" (not set up yet) or "down".
+vault_state() {
+  curl -s --max-time 5 --resolve "$HOST:$PORT:$IP" "https://$HOST:$PORT/v1/status" 2>/dev/null |
+    python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("down"); raise SystemExit
+print("new" if not d.get("initialized") else "sealed" if d.get("sealed") else "unlocked")'
+}
+
+# Waits up to 30 seconds for the restarted vault to answer.
+wait_state() {
+  i=0
+  while [ $i -lt 30 ]; do
+    s=$(vault_state)
+    [ "$s" != down ] && { echo "$s"; return; }
+    sleep 1; i=$((i + 1))
+  done
+  echo down
+}
+
+enable_line() { sed -i 's/^#LoadCredentialEncrypted=/LoadCredentialEncrypted=/' "$UNIT"; }
+disable_line() { sed -i 's/^LoadCredentialEncrypted=/#LoadCredentialEncrypted=/' "$UNIT"; }
+restart() { systemctl daemon-reload; systemctl restart keys; }
+
+if [ "${1:-}" = off ]; then
+  disable_line
+  rm -f "$CRED"
+  restart
+  echo "Automatic unlock is off. After each restart, sign in at $URL to unlock the vault."
+  exit 0
+fi
+
+case $(vault_state) in
+  new) echo "Set your passphrase first: open $URL in a browser, then run this again." >&2; exit 1 ;;
+  down) echo "The vault isn't answering at $URL. Check: systemctl status keys" >&2; exit 1 ;;
+esac
+
+[ -t 0 ] || { echo "Run this in a terminal: it asks for your passphrase." >&2; exit 1; }
+trap 'stty echo 2>/dev/null' EXIT INT TERM
+printf 'Vault passphrase (not shown): '
+stty -echo
+IFS= read -r PASS
+stty echo
+echo
+[ -n "$PASS" ] || { echo "No passphrase entered; nothing changed." >&2; exit 1; }
+
+# Keep the current setup so a wrong passphrase can be undone.
+OLD=""
+if [ -f "$CRED" ]; then OLD="$CRED.previous"; cp -p "$CRED" "$OLD"; fi
+WAS_ON=$(grep -c '^LoadCredentialEncrypted=' "$UNIT" || true)
+
+umask 077
+printf '%s' "$PASS" | systemd-creds encrypt --name=passphrase - "$CRED.new"
+PASS=""
+chmod 0600 "$CRED.new"
+mv "$CRED.new" "$CRED"
+enable_line
+echo "Restarting the vault to check it unlocks by itself..."
+restart
+
+if [ "$(wait_state)" = unlocked ]; then
+  rm -f "$OLD"
+  echo "Done. The vault now unlocks itself after a restart or reboot."
+  echo "If you change your passphrase later, run this again."
+  exit 0
+fi
+
+# It didn't unlock: put things back.
+if [ -n "$OLD" ]; then mv "$OLD" "$CRED"; else rm -f "$CRED"; fi
+[ "$WAS_ON" -gt 0 ] || disable_line
+restart
+echo "That passphrase didn't unlock the vault, so nothing was changed. Run this again and check the passphrase." >&2
+if [ "$(wait_state)" != unlocked ]; then
+  echo "The vault is locked now: sign in at $URL to unlock it." >&2
+fi
+exit 1

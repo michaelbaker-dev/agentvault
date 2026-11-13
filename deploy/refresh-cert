@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs as root: (re)issues the Tailscale certificate for this machine and makes
+# it readable only by the keys service user. The server reloads it every 6h.
+set -eu
+HOST=$(sed -n 's/^hostname *= *"\(.*\)"/\1/p' /etc/keys/config.toml)
+DIR=/var/lib/keys/tls
+install -d -m 0700 -o keys -g keys "$DIR"
+tailscale cert --cert-file "$DIR/cert.pem" --key-file "$DIR/key.pem" "$HOST"
+chown keys:keys "$DIR/cert.pem" "$DIR/key.pem"
+chmod 0600 "$DIR/key.pem"

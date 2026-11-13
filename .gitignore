@@ -1,0 +1,12 @@
+target/
+*.db
+*.db-wal
+*.db-shm
+*.pem
+
+# plaintext key dumps: import into the vault, then shred
+keys.txt
+*.keys.txt
+.env
+.env.*
+.claude/

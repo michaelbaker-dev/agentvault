@@ -1,0 +1,49 @@
+# keys configuration. `deploy/install.sh` writes /etc/keys/config.toml for you;
+# this file documents every option.
+
+# Listen on this machine's Tailscale IP only, so nothing off the tailnet can connect.
+listen = "100.64.0.1:443"
+
+# MagicDNS name. Requests with any other Host header are refused.
+hostname = "vault.your-tailnet.ts.net"
+
+# Tailscale login allowed to set up the vault and sign in to the web interface.
+owner = "you@example.com"
+
+data_dir = "/var/lib/keys/data"
+
+# tailscale_socket = "/var/run/tailscale/tailscaled.sock"
+
+# Usage events older than this are deleted (default 365).
+# event_retention_days = 365
+
+[tls]
+cert_file = "/var/lib/keys/tls/cert.pem"
+key_file = "/var/lib/keys/tls/key.pem"
+# Run `tailscale cert` from the server itself (needs `tailscale set --operator`).
+# The systemd units refresh the certificate as root instead, so leave this off.
+# renew_with_tailscale = false
+
+[describe]
+# Ask each provider's "who am I" endpoint what a new key can do. The key is only
+# ever sent to its own provider.
+# verify_with_provider = true
+
+# Name of a secret holding an Anthropic API key. When it exists, Claude writes
+# descriptions from metadata only (never the value). Set to "" to turn this off.
+# claude_secret = "ANTHROPIC_API_KEY"
+# model = "claude-opus-5-5"
+
+[unlock]
+# Unattended unlock at boot. Anyone who can read this file can unlock the
+# vault, so prefer the systemd credential described in the README.
+# passphrase_file = "/etc/keys/passphrase"
+
+[rotation]
+# Rotate keys automatically when their schedule says so. Only keys whose
+# provider has an API for it, and that have a manager set, are rotated.
+# scheduled = true
+
+# After a rotation the old key keeps working this long, so apps that copied
+# the raw value can fetch the new one, then the vault revokes it.
+# grace_hours = 24
