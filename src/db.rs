@@ -389,7 +389,17 @@ const EVENT_COLS: &str = "id, ts, node, user, ip, actor, action, secret, status,
 /// Hash-chain link: sha256(prev_hash || canonical JSON of the event's fields).
 fn event_hash(prev: &[u8], e: &EventRow) -> [u8; 32] {
     let fields = serde_json::json!([
-        e.ts, e.node, e.user, e.ip, e.actor, e.action, e.secret, e.status, e.latency_us, e.upstream_us, e.detail
+        e.ts,
+        e.node,
+        e.user,
+        e.ip,
+        e.actor,
+        e.action,
+        e.secret,
+        e.status,
+        e.latency_us,
+        e.upstream_us,
+        e.detail
     ]);
     let mut buf = prev.to_vec();
     buf.extend_from_slice(&serde_json::to_vec(&fields).expect("json"));
@@ -437,12 +447,12 @@ impl Db {
 
     fn init(conn: Connection) -> DbResult<Self> {
         // secure_delete overwrites freed pages, so deleted ciphertext doesn't linger on disk.
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=5000;",
-        )?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA)?;
         for (table, col, def) in MIGRATIONS {
-            let exists = conn.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?.exists([col])?;
+            let exists = conn
+                .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
+                .exists([col])?;
             if !exists {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {def}"))?;
             }
@@ -491,7 +501,11 @@ impl Db {
 
     pub fn secret_get(&self, name: &str) -> DbResult<Option<SecretMeta>> {
         self.c()
-            .query_row(&format!("SELECT {SECRET_COLS} FROM secrets WHERE name = ?1"), [name], secret_from_row)
+            .query_row(
+                &format!("SELECT {SECRET_COLS} FROM secrets WHERE name = ?1"),
+                [name],
+                secret_from_row,
+            )
             .optional()
     }
 
@@ -512,7 +526,14 @@ impl Db {
         tx.execute(
             "INSERT INTO secrets(name, notes, tags, version, version_seq, created_at, updated_at, parts, value_mac) \
              VALUES (?1, ?2, ?3, 1, 1, ?4, ?4, ?5, ?6)",
-            params![name, notes, serde_json::to_string(tags).expect("json"), now, serde_json::to_string(v.parts).expect("json"), v.mac],
+            params![
+                name,
+                notes,
+                serde_json::to_string(tags).expect("json"),
+                now,
+                serde_json::to_string(v.parts).expect("json"),
+                v.mac
+            ],
         )?;
         let id = tx.last_insert_rowid();
         apply_settings(&tx, id, settings)?;
@@ -538,10 +559,14 @@ impl Db {
         let mut c = self.c();
         let tx = c.transaction()?;
         // Versions are never reused, even after old ones are rolled back and deleted.
-        let (current, seq): (i64, i64) =
-            tx.query_row("SELECT version, version_seq FROM secrets WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        let highest: i64 =
-            tx.query_row("SELECT COALESCE(MAX(version), 0) FROM secret_versions WHERE secret_id = ?1", [id], |r| r.get(0))?;
+        let (current, seq): (i64, i64) = tx.query_row("SELECT version, version_seq FROM secrets WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        let highest: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM secret_versions WHERE secret_id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
         let version = current.max(highest).max(seq) + 1;
         let (value_ct, dek_ct) = encrypt(id, version).map_err(enc_err)?;
         tx.execute(
@@ -563,7 +588,13 @@ impl Db {
                    JOIN secrets s ON s.id = v.secret_id WHERE s.id = ?1 AND v.version = COALESCE(?2, s.version)";
         self.c()
             .query_row(sql, params![id, version], |r| {
-                Ok(VersionCt { version: r.get(0)?, value_ct: r.get(1)?, dek_ct: r.get(2)?, format: r.get(3)?, provider_ref: r.get(4)? })
+                Ok(VersionCt {
+                    version: r.get(0)?,
+                    value_ct: r.get(1)?,
+                    dek_ct: r.get(2)?,
+                    format: r.get(3)?,
+                    provider_ref: r.get(4)?,
+                })
             })
             .optional()
     }
@@ -643,7 +674,8 @@ impl Db {
     }
 
     pub fn secret_mark_rotated(&self, id: i64) -> DbResult<()> {
-        self.c().execute("UPDATE secrets SET rotated_at = ?2 WHERE id = ?1", params![id, now_ms()])?;
+        self.c()
+            .execute("UPDATE secrets SET rotated_at = ?2 WHERE id = ?1", params![id, now_ms()])?;
         Ok(())
     }
 
@@ -714,7 +746,8 @@ impl Db {
     }
 
     pub fn secret_set_describe_status(&self, id: i64, status: &str) -> DbResult<()> {
-        self.c().execute("UPDATE secrets SET describe_status = ?2 WHERE id = ?1", params![id, status])?;
+        self.c()
+            .execute("UPDATE secrets SET describe_status = ?2 WHERE id = ?1", params![id, status])?;
         Ok(())
     }
 
@@ -831,7 +864,8 @@ impl Db {
     }
 
     pub fn token_touch(&self, id: i64) -> DbResult<()> {
-        self.c().execute("UPDATE tokens SET last_used_at = ?2 WHERE id = ?1", params![id, now_ms()])?;
+        self.c()
+            .execute("UPDATE tokens SET last_used_at = ?2 WHERE id = ?1", params![id, now_ms()])?;
         Ok(())
     }
 
@@ -871,8 +905,19 @@ impl Db {
             "INSERT INTO events(ts, node, user, ip, actor, action, secret, status, latency_us, upstream_us, detail, prev_hash, hash) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
-                row.ts, row.node, row.user, row.ip, row.actor, row.action, row.secret, row.status, row.latency_us,
-                row.upstream_us, row.detail, prev, hash.to_vec()
+                row.ts,
+                row.node,
+                row.user,
+                row.ip,
+                row.actor,
+                row.action,
+                row.secret,
+                row.status,
+                row.latency_us,
+                row.upstream_us,
+                row.detail,
+                prev,
+                hash.to_vec()
             ],
         )?;
         tx.commit()
@@ -917,13 +962,23 @@ impl Db {
             let hash: Vec<u8> = r.get(13)?;
             let link_ok = expected_prev.as_ref().is_none_or(|p| *p == prev);
             if !link_ok || event_hash(&prev, &e).as_slice() != hash.as_slice() {
-                return Ok(AuditReport { ok: false, checked, first_bad_id: Some(e.id), head: None });
+                return Ok(AuditReport {
+                    ok: false,
+                    checked,
+                    first_bad_id: Some(e.id),
+                    head: None,
+                });
             }
             checked += 1;
             head = Some(hex::encode(&hash));
             expected_prev = Some(hash);
         }
-        Ok(AuditReport { ok: true, checked, first_bad_id: None, head })
+        Ok(AuditReport {
+            ok: true,
+            checked,
+            first_bad_id: None,
+            head,
+        })
     }
 
     // ---- rotations ----
@@ -958,7 +1013,8 @@ impl Db {
     }
 
     pub fn rotation_set_rotator(&self, id: i64, rotator: Option<&str>) -> DbResult<()> {
-        self.c().execute("UPDATE rotations SET rotator = ?2 WHERE id = ?1", params![id, rotator])?;
+        self.c()
+            .execute("UPDATE rotations SET rotator = ?2 WHERE id = ?1", params![id, rotator])?;
         Ok(())
     }
 
@@ -1161,8 +1217,15 @@ mod tests {
     #[test]
     fn versions_are_never_reused_and_current_is_protected() {
         let db = Db::memory().unwrap();
-        let nv = NewValue { format: 0, parts: &[], mac: &[1; 32], provider_ref: None };
-        let id = db.secret_create("A", "", &[], &Settings::default(), &nv, |_, _| Ok((vec![1; 40], vec![2; 40]))).unwrap();
+        let nv = NewValue {
+            format: 0,
+            parts: &[],
+            mac: &[1; 32],
+            provider_ref: None,
+        };
+        let id = db
+            .secret_create("A", "", &[], &Settings::default(), &nv, |_, _| Ok((vec![1; 40], vec![2; 40])))
+            .unwrap();
         let v2 = db.secret_add_version(id, &nv, |_, v| Ok((vec![v as u8; 40], vec![2; 40]))).unwrap();
         assert_eq!(v2, 2);
         assert!(!db.version_delete(id, 2).unwrap(), "the current version can't be deleted");
@@ -1175,10 +1238,20 @@ mod tests {
     #[test]
     fn deleting_secret_removes_ciphertext() {
         let db = Db::memory().unwrap();
-        let v = NewValue { format: 0, parts: &[], mac: &[0; 32], provider_ref: None };
-        let id = db.secret_create("A", "", &[], &Settings::default(), &v, |_, _| Ok((vec![1; 40], vec![2; 40]))).unwrap();
+        let v = NewValue {
+            format: 0,
+            parts: &[],
+            mac: &[0; 32],
+            provider_ref: None,
+        };
+        let id = db
+            .secret_create("A", "", &[], &Settings::default(), &v, |_, _| Ok((vec![1; 40], vec![2; 40])))
+            .unwrap();
         db.secret_delete(id).unwrap();
-        let n: i64 = db.raw().query_row("SELECT COUNT(*) FROM secret_versions", [], |r| r.get(0)).unwrap();
+        let n: i64 = db
+            .raw()
+            .query_row("SELECT COUNT(*) FROM secret_versions", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 }

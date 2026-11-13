@@ -45,7 +45,10 @@ pub struct RotationCfg {
 
 impl Default for RotationCfg {
     fn default() -> Self {
-        Self { scheduled: true, grace_hours: default_grace() }
+        Self {
+            scheduled: true,
+            grace_hours: default_grace(),
+        }
     }
 }
 
@@ -115,8 +118,7 @@ impl Config {
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let mut cfg: Config = toml::from_str(&text).map_err(|e| format!("parsing {}: {e}", path.display()))?;
         if cfg.describe.claude_secret.as_deref().is_some_and(str::is_empty) {
             cfg.describe.claude_secret = None;

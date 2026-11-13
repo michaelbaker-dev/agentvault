@@ -34,7 +34,10 @@ impl Caller {
 const CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub enum Resolver {
-    Tailscale { socket: PathBuf, cache: Mutex<HashMap<IpAddr, (Instant, Caller)>> },
+    Tailscale {
+        socket: PathBuf,
+        cache: Mutex<HashMap<IpAddr, (Instant, Caller)>>,
+    },
     #[cfg(test)]
     Fixed(HashMap<IpAddr, Caller>),
 }
@@ -65,7 +68,10 @@ struct WhoIsUser {
 
 impl Resolver {
     pub fn tailscale(socket: PathBuf) -> Self {
-        Self::Tailscale { socket, cache: Mutex::new(HashMap::new()) }
+        Self::Tailscale {
+            socket,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     pub async fn resolve(&self, addr: SocketAddr) -> Result<Caller, String> {
@@ -97,9 +103,7 @@ async fn whois(socket: &PathBuf, addr: SocketAddr) -> Result<Caller, String> {
         .await
         .map_err(|e| format!("connecting to tailscaled: {e}"))?;
     // HTTP/1.0 so the reply is never chunked and ends at EOF.
-    let req = format!(
-        "GET /localapi/v0/whois?addr={addr} HTTP/1.0\r\nHost: local-tailscaled.sock\r\nSec-Tailscale: localapi\r\n\r\n"
-    );
+    let req = format!("GET /localapi/v0/whois?addr={addr} HTTP/1.0\r\nHost: local-tailscaled.sock\r\nSec-Tailscale: localapi\r\n\r\n");
     stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     stream.take(1 << 20).read_to_end(&mut buf).await.map_err(|e| e.to_string())?;

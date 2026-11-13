@@ -72,7 +72,11 @@ pub struct KdfParams {
 
 impl KdfParams {
     /// OWASP-recommended Argon2id settings: 64 MiB, 3 passes.
-    pub const DEFAULT: Self = Self { m_cost_kib: 64 * 1024, t_cost: 3, p_cost: 1 };
+    pub const DEFAULT: Self = Self {
+        m_cost_kib: 64 * 1024,
+        t_cost: 3,
+        p_cost: 1,
+    };
 }
 
 /// Derives a key-encryption key from the passphrase with Argon2id.
@@ -155,7 +159,11 @@ mod tests {
 
     #[test]
     fn kdf_is_deterministic_and_salted() {
-        let p = KdfParams { m_cost_kib: 256, t_cost: 1, p_cost: 1 };
+        let p = KdfParams {
+            m_cost_kib: 256,
+            t_cost: 1,
+            p_cost: 1,
+        };
         let a = derive_kek(b"pw", b"saltsaltsaltsalt", p).unwrap();
         let b = derive_kek(b"pw", b"saltsaltsaltsalt", p).unwrap();
         let c = derive_kek(b"pw", b"othersaltothersa", p).unwrap();

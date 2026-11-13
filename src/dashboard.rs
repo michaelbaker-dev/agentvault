@@ -17,9 +17,21 @@ const HOUR: i64 = 3_600_000;
 impl Range {
     pub fn parse(s: &str) -> Self {
         match s {
-            "7d" => Range { label: "7d", span_ms: 7 * 24 * HOUR, bucket_ms: 6 * HOUR },
-            "30d" => Range { label: "30d", span_ms: 30 * 24 * HOUR, bucket_ms: 24 * HOUR },
-            _ => Range { label: "24h", span_ms: 24 * HOUR, bucket_ms: HOUR },
+            "7d" => Range {
+                label: "7d",
+                span_ms: 7 * 24 * HOUR,
+                bucket_ms: 6 * HOUR,
+            },
+            "30d" => Range {
+                label: "30d",
+                span_ms: 30 * 24 * HOUR,
+                bucket_ms: 24 * HOUR,
+            },
+            _ => Range {
+                label: "24h",
+                span_ms: 24 * HOUR,
+                bucket_ms: HOUR,
+            },
         }
     }
 }
@@ -131,8 +143,12 @@ pub fn build(range: Range, events: Vec<EventRow>) -> Dashboard {
     let truncated = events.len() as i64 >= EVENT_LIMIT;
     let n_buckets = (range.span_ms / range.bucket_ms) as usize;
     let first_bucket = (from / range.bucket_ms + 1) * range.bucket_ms - range.bucket_ms;
-    let mut timeline: Vec<Bucket> =
-        (0..=n_buckets).map(|i| Bucket { t: first_bucket + i as i64 * range.bucket_ms, ..Default::default() }).collect();
+    let mut timeline: Vec<Bucket> = (0..=n_buckets)
+        .map(|i| Bucket {
+            t: first_bucket + i as i64 * range.bucket_ms,
+            ..Default::default()
+        })
+        .collect();
 
     let mut totals = Totals::default();
     let mut machines: HashMap<(String, String), MachineUsage> = HashMap::new();

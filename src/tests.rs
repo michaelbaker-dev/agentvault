@@ -67,8 +67,16 @@ fn test_app_with(endpoints: crate::rotate::Endpoints) -> AppRef {
         owner: OWNER.into(),
         data_dir: "/nonexistent-test-data".into(),
         tailscale_socket: "/nonexistent".into(),
-        tls: Tls { cert_file: "/x".into(), key_file: "/x".into(), renew_with_tailscale: false },
-        describe: Describe { verify_with_provider: false, claude_secret: None, model: "claude-opus-5-5".into() },
+        tls: Tls {
+            cert_file: "/x".into(),
+            key_file: "/x".into(),
+            renew_with_tailscale: false,
+        },
+        describe: Describe {
+            verify_with_provider: false,
+            claude_secret: None,
+            model: "claude-opus-5-5".into(),
+        },
         unlock: Unlock::default(),
         event_retention_days: 30,
         rotation: Default::default(),
@@ -137,7 +145,10 @@ impl Session {
 fn session_from(r: &Resp) -> Session {
     let set = r.headers.get(header::SET_COOKIE).unwrap().to_str().unwrap();
     assert!(set.contains("HttpOnly") && set.contains("Secure") && set.contains("SameSite=Strict"));
-    Session { cookie: set.split(';').next().unwrap().to_string(), csrf: r.body["csrf"].as_str().unwrap().to_string() }
+    Session {
+        cookie: set.split(';').next().unwrap().to_string(),
+        csrf: r.body["csrf"].as_str().unwrap().to_string(),
+    }
 }
 
 async fn setup(app: &AppRef) -> Session {
@@ -147,7 +158,15 @@ async fn setup(app: &AppRef) -> Session {
 }
 
 async fn add(app: &AppRef, s: &Session, name: &str, value: &str) {
-    let r = call(app, LAPTOP, "POST", "/v1/secrets", &s.hdrs(), Some(json!({ "name": name, "value": value, "verify": false }))).await;
+    let r = call(
+        app,
+        LAPTOP,
+        "POST",
+        "/v1/secrets",
+        &s.hdrs(),
+        Some(json!({ "name": name, "value": value, "verify": false })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
 }
 
@@ -171,8 +190,13 @@ async fn network_guards() {
     let r = call(&app, OUTSIDER, "GET", "/v1/status", &[], None).await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "non-tailnet address must be refused");
 
-    let mut req = Request::builder().uri("/v1/status").header(header::HOST, "evil.example").body(Body::empty()).unwrap();
-    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(format!("{LAPTOP}:1").parse().unwrap()));
+    let mut req = Request::builder()
+        .uri("/v1/status")
+        .header(header::HOST, "evil.example")
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(format!("{LAPTOP}:1").parse().unwrap()));
     let resp = router(app.clone()).oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::MISDIRECTED_REQUEST, "DNS-rebinding Host must be refused");
 
@@ -199,7 +223,11 @@ async fn only_owner_devices_can_set_up_or_sign_in() {
     let r = call(&app, LAPTOP, "POST", "/v1/setup", &[], Some(json!({ "passphrase": PASS }))).await;
     assert_eq!(r.status, StatusCode::CONFLICT, "setup can't run twice");
     let r = call(&app, FRIEND, "POST", "/v1/session", &[], Some(json!({ "passphrase": PASS }))).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN, "the passphrase alone isn't enough from someone else's device");
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "the passphrase alone isn't enough from someone else's device"
+    );
 }
 
 #[tokio::test]
@@ -208,9 +236,25 @@ async fn session_needs_csrf_and_stays_on_its_device() {
     let s = setup(&app).await;
     add(&app, &s, "OPENAI_API_KEY", &fake("sk-proj-", 'q', 36)).await;
 
-    let r = call(&app, LAPTOP, "GET", "/v1/secrets/OPENAI_API_KEY/value", &[("cookie", &s.cookie)], None).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "GET",
+        "/v1/secrets/OPENAI_API_KEY/value",
+        &[("cookie", &s.cookie)],
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "cookie without CSRF header");
-    let r = call(&app, LAPTOP, "GET", "/v1/secrets/OPENAI_API_KEY/value", &[("cookie", &s.cookie), ("x-keys-csrf", "nope")], None).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "GET",
+        "/v1/secrets/OPENAI_API_KEY/value",
+        &[("cookie", &s.cookie), ("x-keys-csrf", "nope")],
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "wrong CSRF header");
     let r = call(&app, LAPTOP, "GET", "/v1/secrets/OPENAI_API_KEY/value", &s.hdrs(), None).await;
     assert_eq!(r.status, StatusCode::OK);
@@ -229,9 +273,25 @@ async fn crud_rename_versions_and_delete() {
     let app = test_app();
     let s = setup(&app).await;
     add(&app, &s, "GH", &fake("ghp_", 'a', 36)).await;
-    let r = call(&app, LAPTOP, "POST", "/v1/secrets", &s.hdrs(), Some(json!({ "name": "GH", "value": "x" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/secrets",
+        &s.hdrs(),
+        Some(json!({ "name": "GH", "value": "x" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::CONFLICT);
-    let r = call(&app, LAPTOP, "POST", "/v1/secrets", &s.hdrs(), Some(json!({ "name": "../etc", "value": "x" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/secrets",
+        &s.hdrs(),
+        Some(json!({ "name": "../etc", "value": "x" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
 
     let r = call(
@@ -249,7 +309,10 @@ async fn crud_rename_versions_and_delete() {
     assert_eq!(r.body["tags"], json!(["ci"]));
     let r = call(&app, LAPTOP, "GET", "/v1/secrets/GITHUB_TOKEN/value", &s.hdrs(), None).await;
     assert_eq!(r.body["value"], fake("ghp_", 'b', 36));
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets/GH", &s.hdrs(), None).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets/GH", &s.hdrs(), None).await.status,
+        StatusCode::NOT_FOUND
+    );
 
     // Describer runs in the background; give it a moment.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -276,14 +339,40 @@ async fn token_scopes_globs_pinning_and_revocation() {
     let h = [("authorization", agent.as_str())];
     let r = call(&app, SPARK, "GET", "/v1/secrets", &h, None).await;
     assert_eq!(r.status, StatusCode::OK);
-    let names: Vec<_> = r.body["secrets"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect();
+    let names: Vec<_> = r.body["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(names, vec!["OPENAI_API_KEY"], "globs hide other secrets");
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets/OPENAI_API_KEY/value", &h, None).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets/STRIPE_LIVE", &h, None).await.status, StatusCode::FORBIDDEN);
-    let r = call(&app, SPARK, "POST", "/v1/secrets", &h, Some(json!({ "name": "OPENAI_X", "value": "v" }))).await;
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets/OPENAI_API_KEY/value", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets/STRIPE_LIVE", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/secrets",
+        &h,
+        Some(json!({ "name": "OPENAI_X", "value": "v" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    assert_eq!(call(&app, SPARK, "GET", "/v1/tokens", &h, None).await.status, StatusCode::FORBIDDEN, "tokens can't manage tokens");
-    assert_eq!(call(&app, SPARK, "GET", "/v1/dashboard", &h, None).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/tokens", &h, None).await.status,
+        StatusCode::FORBIDDEN,
+        "tokens can't manage tokens"
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/dashboard", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
 
     // A writer token still can't redirect the proxy (that would leak the key).
     let writer = token(&app, &s, &["write"], &["*"], &[]).await;
@@ -299,17 +388,59 @@ async fn token_scopes_globs_pinning_and_revocation() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 
     let pinned = token(&app, &s, &["read"], &["*"], &["laptop"]).await;
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets/STRIPE_LIVE/value", &[("authorization", pinned.as_str())], None).await.status, StatusCode::FORBIDDEN);
-    let r = call(&app, LAPTOP, "GET", "/v1/secrets/STRIPE_LIVE/value", &[("authorization", pinned.as_str())], None).await;
+    assert_eq!(
+        call(
+            &app,
+            SPARK,
+            "GET",
+            "/v1/secrets/STRIPE_LIVE/value",
+            &[("authorization", pinned.as_str())],
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let r = call(
+        &app,
+        LAPTOP,
+        "GET",
+        "/v1/secrets/STRIPE_LIVE/value",
+        &[("authorization", pinned.as_str())],
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.body["value"], fake("sk_live_", 'z', 24));
 
     let list = call(&app, LAPTOP, "GET", "/v1/tokens", &s.hdrs(), None).await;
     let id = list.body["tokens"][0]["id"].as_i64().unwrap();
     assert!(list.body.to_string().find("kt_").is_none(), "token list never shows token values");
-    assert_eq!(call(&app, LAPTOP, "DELETE", &format!("/v1/tokens/{id}"), &s.hdrs(), None).await.status, StatusCode::OK);
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets/STRIPE_LIVE/value", &[("authorization", pinned.as_str())], None).await.status, StatusCode::UNAUTHORIZED);
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets", &[("authorization", "Bearer kt_forged")], None).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&app, LAPTOP, "DELETE", &format!("/v1/tokens/{id}"), &s.hdrs(), None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            LAPTOP,
+            "GET",
+            "/v1/secrets/STRIPE_LIVE/value",
+            &[("authorization", pinned.as_str())],
+            None
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets", &[("authorization", "Bearer kt_forged")], None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -320,12 +451,32 @@ async fn sealing_and_lockout() {
     let reader = token(&app, &s, &["read"], &["*"], &[]).await;
 
     assert_eq!(call(&app, LAPTOP, "POST", "/v1/seal", &s.hdrs(), None).await.status, StatusCode::OK);
-    let r = call(&app, SPARK, "GET", "/v1/secrets/K/value", &[("authorization", reader.as_str())], None).await;
+    let r = call(
+        &app,
+        SPARK,
+        "GET",
+        "/v1/secrets/K/value",
+        &[("authorization", reader.as_str())],
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "sealed vault can't decrypt");
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets", &s.hdrs(), None).await.status, StatusCode::UNAUTHORIZED, "sealing signs everyone out");
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets", &s.hdrs(), None).await.status,
+        StatusCode::UNAUTHORIZED,
+        "sealing signs everyone out"
+    );
 
     for _ in 0..5 {
-        let r = call(&app, LAPTOP, "POST", "/v1/session", &[], Some(json!({ "passphrase": "wrong passphrase!" }))).await;
+        let r = call(
+            &app,
+            LAPTOP,
+            "POST",
+            "/v1/session",
+            &[],
+            Some(json!({ "passphrase": "wrong passphrase!" })),
+        )
+        .await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     }
     let r = call(&app, LAPTOP, "POST", "/v1/session", &[], Some(json!({ "passphrase": PASS }))).await;
@@ -333,7 +484,15 @@ async fn sealing_and_lockout() {
 
     let r = call(&app, SPARK, "POST", "/v1/session", &[], Some(json!({ "passphrase": PASS }))).await;
     assert_eq!(r.status, StatusCode::OK);
-    let r = call(&app, SPARK, "GET", "/v1/secrets/K/value", &[("authorization", reader.as_str())], None).await;
+    let r = call(
+        &app,
+        SPARK,
+        "GET",
+        "/v1/secrets/K/value",
+        &[("authorization", reader.as_str())],
+        None,
+    )
+    .await;
     assert_eq!(r.body["value"], "value-123456789");
 }
 
@@ -344,7 +503,15 @@ async fn usage_is_recorded_and_tamper_evident() {
     add(&app, &s, "K", "value-123456789").await;
     let reader = token(&app, &s, &["read"], &["*"], &[]).await;
     for _ in 0..3 {
-        call(&app, SPARK, "GET", "/v1/secrets/K/value", &[("authorization", reader.as_str())], None).await;
+        call(
+            &app,
+            SPARK,
+            "GET",
+            "/v1/secrets/K/value",
+            &[("authorization", reader.as_str())],
+            None,
+        )
+        .await;
     }
     call(&app, FRIEND, "GET", "/v1/secrets/K/value", &[], None).await;
 
@@ -355,19 +522,45 @@ async fn usage_is_recorded_and_tamper_evident() {
     assert_eq!(k["machines"], json!(["laptop", "server"]), "laptop created it, server read it");
     assert_eq!(k["actions"]["secret.create"], 1);
     assert!(d.body["totals"]["denied"].as_u64().unwrap() >= 1);
-    assert!(d.body["by_machine"].as_array().unwrap().iter().any(|m| m["node"] == "friend-pc" && m["denied"] == 1));
-    assert!(d.body["latency"].as_array().unwrap().iter().any(|l| l["key"] == "secret.read" && l["count"] == 3));
-    assert!(!d.body.to_string().contains("value-123456789"), "the dashboard never contains values");
+    assert!(
+        d.body["by_machine"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["node"] == "friend-pc" && m["denied"] == 1)
+    );
+    assert!(
+        d.body["latency"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["key"] == "secret.read" && l["count"] == 3)
+    );
+    assert!(
+        !d.body.to_string().contains("value-123456789"),
+        "the dashboard never contains values"
+    );
 
     let a = call(&app, LAPTOP, "GET", "/v1/audit/verify", &s.hdrs(), None).await;
     assert_eq!(a.body["ok"], true);
-    app.db.raw().execute("UPDATE events SET node = 'laptop' WHERE action = 'secret.read'", []).unwrap();
+    app.db
+        .raw()
+        .execute("UPDATE events SET node = 'laptop' WHERE action = 'secret.read'", [])
+        .unwrap();
     let a = call(&app, LAPTOP, "GET", "/v1/audit/verify", &s.hdrs(), None).await;
     assert_eq!(a.body["ok"], false, "editing the log breaks the chain");
 }
 
 async fn rpc(app: &AppRef, auth: &str, method: &str, params: Value) -> Resp {
-    call(app, SPARK, "POST", "/mcp", &[("authorization", auth)], Some(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))).await
+    call(
+        app,
+        SPARK,
+        "POST",
+        "/mcp",
+        &[("authorization", auth)],
+        Some(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })),
+    )
+    .await
 }
 
 fn tool_json(r: &Resp) -> Value {
@@ -383,38 +576,100 @@ async fn mcp_exposes_metadata_and_proxy_but_never_values() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let claude = token(&app, &s, &["list", "proxy"], &["*"], &[]).await;
 
-    assert_eq!(call(&app, SPARK, "POST", "/mcp", &[], Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(
+            &app,
+            SPARK,
+            "POST",
+            "/mcp",
+            &[],
+            Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
 
-    let r = rpc(&app, &claude, "initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"} })).await;
+    let r = rpc(
+        &app,
+        &claude,
+        "initialize",
+        json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"} }),
+    )
+    .await;
     assert_eq!(r.body["result"]["protocolVersion"], "2025-06-18");
-    let n = call(&app, SPARK, "POST", "/mcp", &[("authorization", &claude)], Some(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))).await;
+    let n = call(
+        &app,
+        SPARK,
+        "POST",
+        "/mcp",
+        &[("authorization", &claude)],
+        Some(json!({"jsonrpc":"2.0","method":"notifications/initialized"})),
+    )
+    .await;
     assert_eq!(n.status, StatusCode::ACCEPTED);
 
     let r = rpc(&app, &claude, "tools/list", json!({})).await;
-    let names: Vec<_> = r.body["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let names: Vec<_> = r.body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names, vec!["list_secrets", "describe_secret", "proxy_request"]);
 
     let r = rpc(&app, &claude, "tools/call", json!({ "name": "list_secrets", "arguments": {} })).await;
     let out = tool_json(&r);
     assert_eq!(out["secrets"].as_array().unwrap().len(), 2);
-    let r = rpc(&app, &claude, "tools/call", json!({ "name": "describe_secret", "arguments": { "name": "OPENAI_API_KEY" } })).await;
+    let r = rpc(
+        &app,
+        &claude,
+        "tools/call",
+        json!({ "name": "describe_secret", "arguments": { "name": "OPENAI_API_KEY" } }),
+    )
+    .await;
     let out = tool_json(&r);
     assert_eq!(out["proxy"]["base_url"], "https://api.openai.com/");
-    let all = format!("{:?}", call(&app, LAPTOP, "GET", "/v1/events?limit=500", &s.hdrs(), None).await.body);
+    let all = format!(
+        "{:?}",
+        call(&app, LAPTOP, "GET", "/v1/events?limit=500", &s.hdrs(), None).await.body
+    );
     assert!(!all.contains(&fake("sk-proj-", 'q', 36)), "events never contain values");
 
-    let r = rpc(&app, &claude, "tools/call", json!({ "name": "proxy_request", "arguments": { "secret": "NOTES_PW", "path": "/x" } })).await;
+    let r = rpc(
+        &app,
+        &claude,
+        "tools/call",
+        json!({ "name": "proxy_request", "arguments": { "secret": "NOTES_PW", "path": "/x" } }),
+    )
+    .await;
     assert_eq!(r.body["result"]["isError"], true, "unknown provider has no proxy target");
-    let r = rpc(&app, &claude, "tools/call", json!({ "name": "proxy_request", "arguments": { "secret": "OPENAI_API_KEY", "path": "../../etc" } })).await;
+    let r = rpc(
+        &app,
+        &claude,
+        "tools/call",
+        json!({ "name": "proxy_request", "arguments": { "secret": "OPENAI_API_KEY", "path": "../../etc" } }),
+    )
+    .await;
     assert_eq!(r.body["result"]["isError"], true);
-    let r = rpc(&app, &claude, "tools/call", json!({ "name": "get_value", "arguments": { "name": "OPENAI_API_KEY" } })).await;
+    let r = rpc(
+        &app,
+        &claude,
+        "tools/call",
+        json!({ "name": "get_value", "arguments": { "name": "OPENAI_API_KEY" } }),
+    )
+    .await;
     assert_eq!(r.body["result"]["isError"], true, "there is no value tool");
     let r = rpc(&app, &claude, "nope", json!({})).await;
     assert_eq!(r.body["error"]["code"], -32601);
 
     let lister = token(&app, &s, &["list"], &["*"], &[]).await;
     let r = rpc(&app, &lister, "tools/list", json!({})).await;
-    assert_eq!(r.body["result"]["tools"].as_array().unwrap().len(), 2, "no proxy tool without the proxy scope");
+    assert_eq!(
+        r.body["result"]["tools"].as_array().unwrap().len(),
+        2,
+        "no proxy tool without the proxy scope"
+    );
 }
 
 #[tokio::test]
@@ -422,25 +677,58 @@ async fn sensitive_actions_need_a_recent_passphrase() {
     let app = test_app();
     let s = setup(&app).await;
     add(&app, &s, "K", "value-123456789").await;
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets/K/value", &s.hdrs(), None).await.status, StatusCode::OK);
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets/K/value", &s.hdrs(), None).await.status,
+        StatusCode::OK
+    );
 
     // An hour later (or an agent replaying a stolen cookie): metadata yes, values no.
     app.sessions.make_stale();
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets", &s.hdrs(), None).await.status, StatusCode::OK);
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets", &s.hdrs(), None).await.status,
+        StatusCode::OK
+    );
     for (m, path, body) in [
         ("GET", "/v1/secrets/K/value", None),
         ("DELETE", "/v1/secrets/K", None),
         ("POST", "/v1/tokens", Some(json!({ "name": "x", "scopes": ["read"] }))),
-        ("PATCH", "/v1/secrets/K", Some(json!({ "proxy": { "base_url": "https://x.example" } }))),
+        (
+            "PATCH",
+            "/v1/secrets/K",
+            Some(json!({ "proxy": { "base_url": "https://x.example" } })),
+        ),
     ] {
         let r = call(&app, LAPTOP, m, path, &s.hdrs(), body).await;
         assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED, "{m} {path}");
     }
-    let r = call(&app, LAPTOP, "POST", "/v1/session/confirm", &s.hdrs(), Some(json!({ "passphrase": "nope nope nope" }))).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN, "wrong passphrase isn't mistaken for a lost session");
-    let r = call(&app, LAPTOP, "POST", "/v1/session/confirm", &s.hdrs(), Some(json!({ "passphrase": PASS }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": "nope nope nope" })),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "wrong passphrase isn't mistaken for a lost session"
+    );
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": PASS })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/secrets/K/value", &s.hdrs(), None).await.status, StatusCode::OK);
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/secrets/K/value", &s.hdrs(), None).await.status,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -451,7 +739,16 @@ async fn parallel_wrong_passphrases_cant_beat_the_lockout() {
     for _ in 0..20 {
         let app = app.clone();
         tasks.push(tokio::spawn(async move {
-            call(&app, SPARK, "POST", "/v1/session", &[], Some(json!({ "passphrase": "guess guess guess" }))).await.status
+            call(
+                &app,
+                SPARK,
+                "POST",
+                "/v1/session",
+                &[],
+                Some(json!({ "passphrase": "guess guess guess" })),
+            )
+            .await
+            .status
         }));
     }
     let mut tried = 0;
@@ -473,18 +770,59 @@ async fn tokens_cant_hijack_the_describer_key_or_use_unsafe_methods() {
     let mut app_cfg_with_claude = app.cfg.clone();
     app_cfg_with_claude.describe.claude_secret = Some("ANTHROPIC_API_KEY".into());
     // Use a fresh app sharing nothing but the config change.
-    let app2 = Arc::new(App { cfg: app_cfg_with_claude, ..clone_app(&app) });
-    let r = call(&app2, SPARK, "PATCH", "/v1/secrets/GITHUB_TOKEN", &w, Some(json!({ "name": "ANTHROPIC_API_KEY" }))).await;
+    let app2 = Arc::new(App {
+        cfg: app_cfg_with_claude,
+        ..clone_app(&app)
+    });
+    let r = call(
+        &app2,
+        SPARK,
+        "PATCH",
+        "/v1/secrets/GITHUB_TOKEN",
+        &w,
+        Some(json!({ "name": "ANTHROPIC_API_KEY" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    let r = call(&app2, SPARK, "POST", "/v1/secrets", &w, Some(json!({ "name": "ANTHROPIC_API_KEY", "value": "x-12345678" }))).await;
+    let r = call(
+        &app2,
+        SPARK,
+        "POST",
+        "/v1/secrets",
+        &w,
+        Some(json!({ "name": "ANTHROPIC_API_KEY", "value": "x-12345678" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 
-    let r = call(&app, LAPTOP, "POST", "/v1/tokens", &s.hdrs(), Some(json!({ "name": "agent", "scopes": ["proxy"], "proxy_get_only": true }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/tokens",
+        &s.hdrs(),
+        Some(json!({ "name": "agent", "scopes": ["proxy"], "proxy_get_only": true })),
+    )
+    .await;
     let agent = format!("Bearer {}", r.body["token"].as_str().unwrap());
-    let r = rpc(&app, &agent, "tools/call", json!({ "name": "proxy_request", "arguments": { "secret": "GITHUB_TOKEN", "method": "POST", "path": "/user/keys" } })).await;
+    let r = rpc(
+        &app,
+        &agent,
+        "tools/call",
+        json!({ "name": "proxy_request", "arguments": { "secret": "GITHUB_TOKEN", "method": "POST", "path": "/user/keys" } }),
+    )
+    .await;
     assert_eq!(r.body["result"]["isError"], true);
     assert!(tool_json(&r)["error"].as_str().unwrap().contains("GET"));
-    let r = call(&app, SPARK, "POST", "/v1/proxy/GITHUB_TOKEN/user/keys", &[("authorization", agent.as_str())], None).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/proxy/GITHUB_TOKEN/user/keys",
+        &[("authorization", agent.as_str())],
+        None,
+    )
+    .await;
     assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED);
     let r = call(&app, LAPTOP, "TRACE", "/v1/proxy/GITHUB_TOKEN/x", &s.hdrs(), None).await;
     assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "TRACE would echo the injected key");
@@ -530,7 +868,12 @@ async fn owner_only_secrets_are_invisible_to_every_token() {
     assert_eq!(r.body["owner_only"], true, "wallet keys start owner-only");
     assert_eq!(r.body["kind"], "private_key");
     assert_eq!(r.body["rotation"]["mode"], "never");
-    let r = add_with(&app, &s, json!({ "name": "VPS_ROOT", "value": "hunter2 hunter2", "notes": "VPS root password" })).await;
+    let r = add_with(
+        &app,
+        &s,
+        json!({ "name": "VPS_ROOT", "value": "hunter2 hunter2", "notes": "VPS root password" }),
+    )
+    .await;
     assert_eq!(r.body["owner_only"], true, "passwords start owner-only");
     assert_eq!(r.body["kind"], "password");
     add(&app, &s, "OPENAI_API_KEY", &fake("sk-proj-", 'q', 36)).await;
@@ -538,7 +881,12 @@ async fn owner_only_secrets_are_invisible_to_every_token() {
     let everything = token(&app, &s, &["list", "read", "write", "delete", "proxy"], &["*"], &[]).await;
     let h = [("authorization", everything.as_str())];
     let r = call(&app, SPARK, "GET", "/v1/secrets", &h, None).await;
-    let names: Vec<_> = r.body["secrets"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap().to_string()).collect();
+    let names: Vec<_> = r.body["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(names, vec!["OPENAI_API_KEY"]);
     for (m, path, body) in [
         ("GET", "/v1/secrets/WALLET", None),
@@ -548,15 +896,33 @@ async fn owner_only_secrets_are_invisible_to_every_token() {
         ("POST", "/v1/secrets/WALLET/describe", None),
         ("GET", "/v1/proxy/VPS_ROOT/x", None),
     ] {
-        assert_eq!(call(&app, SPARK, m, path, &h, body).await.status, StatusCode::NOT_FOUND, "{m} {path}");
+        assert_eq!(
+            call(&app, SPARK, m, path, &h, body).await.status,
+            StatusCode::NOT_FOUND,
+            "{m} {path}"
+        );
     }
     let r = rpc(&app, &everything, "tools/call", json!({ "name": "list_secrets", "arguments": {} })).await;
     assert!(!tool_json(&r).to_string().contains("WALLET"));
-    let r = rpc(&app, &everything, "tools/call", json!({ "name": "describe_secret", "arguments": { "name": "WALLET" } })).await;
+    let r = rpc(
+        &app,
+        &everything,
+        "tools/call",
+        json!({ "name": "describe_secret", "arguments": { "name": "WALLET" } }),
+    )
+    .await;
     assert_eq!(r.body["result"]["isError"], true);
 
     // The same value stored openly doesn't reveal the owner-only copy.
-    let r = call(&app, SPARK, "POST", "/v1/secrets", &h, Some(json!({ "name": "WALLET_COPY", "value": wallet, "verify": false }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/secrets",
+        &h,
+        Some(json!({ "name": "WALLET_COPY", "value": wallet, "verify": false })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::CREATED);
     assert_eq!(r.body["duplicate_of"], Value::Null, "{:?}", r.body);
     assert_eq!(r.body["duplicates"], json!([]));
@@ -567,18 +933,50 @@ async fn owner_only_secrets_are_invisible_to_every_token() {
     call(&app, LAPTOP, "DELETE", "/v1/secrets/WALLET_COPY", &s.hdrs(), None).await;
 
     // Tokens can't flip the flag or set other owner settings.
-    let r = call(&app, SPARK, "PATCH", "/v1/secrets/OPENAI_API_KEY", &h, Some(json!({ "owner_only": false }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "PATCH",
+        "/v1/secrets/OPENAI_API_KEY",
+        &h,
+        Some(json!({ "owner_only": false })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    let r = call(&app, SPARK, "POST", "/v1/secrets", &h, Some(json!({ "name": "X", "value": "v-12345678", "fields": { "email": "a@b" } }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/secrets",
+        &h,
+        Some(json!({ "name": "X", "value": "v-12345678", "fields": { "email": "a@b" } })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 
     // The owner sees everything; exposing an owner-only secret needs a fresh passphrase.
     let r = call(&app, LAPTOP, "GET", "/v1/secrets/WALLET/value", &s.hdrs(), None).await;
     assert_eq!(r.body["value"], wallet);
     app.sessions.make_stale();
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/WALLET", &s.hdrs(), Some(json!({ "owner_only": false }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/WALLET",
+        &s.hdrs(),
+        Some(json!({ "owner_only": false })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED);
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/WALLET", &s.hdrs(), Some(json!({ "notes": "cold storage" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/WALLET",
+        &s.hdrs(),
+        Some(json!({ "notes": "cold storage" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "harmless edits don't need it");
 }
 
@@ -597,7 +995,10 @@ async fn linked_parts_fields_and_duplicates() {
     assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
     assert_eq!(r.body["fields"]["key_id"], "PKTEST123");
     assert_eq!(r.body["parts"], json!(["webhook_secret"]));
-    assert!(!r.body.to_string().contains("whsec-1234567890"), "metadata never carries secret parts");
+    assert!(
+        !r.body.to_string().contains("whsec-1234567890"),
+        "metadata never carries secret parts"
+    );
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let r = call(&app, LAPTOP, "GET", "/v1/secrets/ALPACA", &s.hdrs(), None).await;
     assert_eq!(r.body["provider"], "alpaca-paper", "PK key IDs are paper trading");
@@ -610,7 +1011,15 @@ async fn linked_parts_fields_and_duplicates() {
     assert_eq!(r.body["fields"]["key_id"], "PKTEST123");
 
     // Changing only a part keeps the value and makes a new version; "" removes a part.
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/ALPACA", &s.hdrs(), Some(json!({ "extras": [{ "name": "webhook_secret", "value": "" }], "verify": false }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/ALPACA",
+        &s.hdrs(),
+        Some(json!({ "extras": [{ "name": "webhook_secret", "value": "" }], "verify": false })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(r.body["version"], 2);
     assert_eq!(r.body["parts"], json!([]));
@@ -621,14 +1030,22 @@ async fn linked_parts_fields_and_duplicates() {
     let r = add_with(&app, &s, json!({ "name": "ALPACA_COPY", "value": secret })).await;
     assert_eq!(r.body["duplicate_of"], "ALPACA");
     let r = call(&app, LAPTOP, "GET", "/v1/secrets", &s.hdrs(), None).await;
-    let a = r.body["secrets"].as_array().unwrap().iter().find(|x| x["name"] == "ALPACA").unwrap();
+    let a = r.body["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"] == "ALPACA")
+        .unwrap();
     assert_eq!(a["duplicates"], json!(["ALPACA_COPY"]));
 
     // A key that can rotate itself still needs its details first.
     let r = add_with(&app, &s, json!({ "name": "AZ", "value": format!("abc8Q~{}", "y".repeat(34)) })).await;
     assert_eq!(r.body["rotation"]["mode"], "auto");
     assert_eq!(r.body["rotation"]["ready"], false);
-    assert_eq!(r.body["rotation"]["missing"], json!(["Tenant (directory) ID", "Application (client) ID"]));
+    assert_eq!(
+        r.body["rotation"]["missing"],
+        json!(["Tenant (directory) ID", "Application (client) ID"])
+    );
 
     // Bad input is refused.
     for bad in [
@@ -674,7 +1091,11 @@ mod fake {
         format!("{}...{}", &k[..12], &k[k.len() - 3..])
     }
     fn bearer(h: &HeaderMap) -> String {
-        h.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("").to_string()
+        h.get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("")
+            .to_string()
     }
     fn ok(v: Value) -> Response {
         axum::Json(v).into_response()
@@ -707,7 +1128,11 @@ mod fake {
                 }
             }
             ("GET", ["or", "keys"]) => {
-                let data: Vec<Value> = f.or_keys.iter().map(|(hash, k)| json!({ "hash": hash, "label": masked(k) })).collect();
+                let data: Vec<Value> = f
+                    .or_keys
+                    .iter()
+                    .map(|(hash, k)| json!({ "hash": hash, "label": masked(k) }))
+                    .collect();
                 ok(json!({ "data": data }))
             }
             ("GET", ["or", "keys", _]) => ok(json!({ "data": { "limit": 5, "limit_reset": "monthly" } })),
@@ -729,12 +1154,18 @@ mod fake {
                 if f.cf_valid.contains(&bearer(&h)) {
                     ok(json!({ "success": true, "result": { "id": "tok123", "status": "active" } }))
                 } else {
-                    err(StatusCode::UNAUTHORIZED, json!({ "success": false, "errors": [{ "message": "Invalid API Token" }] }))
+                    err(
+                        StatusCode::UNAUTHORIZED,
+                        json!({ "success": false, "errors": [{ "message": "Invalid API Token" }] }),
+                    )
                 }
             }
             ("PUT", ["cf", "user", "tokens", "tok123", "value"]) => {
                 if !f.cf_valid.contains(&bearer(&h)) {
-                    return err(StatusCode::FORBIDDEN, json!({ "success": false, "errors": [{ "message": "no permission" }] }));
+                    return err(
+                        StatusCode::FORBIDDEN,
+                        json!({ "success": false, "errors": [{ "message": "no permission" }] }),
+                    );
                 }
                 let new = format!("cfut_{}", "R".repeat(44));
                 f.cf_valid = if f.cf_break_verify { vec![] } else { vec![new.clone()] };
@@ -753,23 +1184,36 @@ mod fake {
                 "id": "kOLD123",
                 "capabilities": { "devices": { "create": { "reusable": false, "ephemeral": false, "preauthorized": true, "tags": ["tag:fw"] } } }
             })),
-            ("POST", ["ts", "tailnet", "-", "keys"]) => ok(json!({ "key": format!("tskey-auth-kNEW456-{}", "z".repeat(30)), "id": "kNEW456" })),
+            ("POST", ["ts", "tailnet", "-", "keys"]) => {
+                ok(json!({ "key": format!("tskey-auth-kNEW456-{}", "z".repeat(30)), "id": "kNEW456" }))
+            }
             ("DELETE", ["ts", "tailnet", "-", "keys", _]) => ok(json!({})),
             // Microsoft
             ("POST", ["ms", _, "oauth2", "v2.0", "token"]) => {
                 let fm = form(&body);
-                let secret = fm.iter().find(|(k, _)| k == "client_secret").map(|x| x.1.clone()).unwrap_or_default();
+                let secret = fm
+                    .iter()
+                    .find(|(k, _)| k == "client_secret")
+                    .map(|x| x.1.clone())
+                    .unwrap_or_default();
                 if f.azure_ok.contains(&secret) {
                     ok(json!({ "access_token": format!("az-{}", &secret[..3]), "expires_in": 3599 }))
                 } else {
-                    err(StatusCode::UNAUTHORIZED, json!({ "error": "invalid_client", "error_description": "bad secret" }))
+                    err(
+                        StatusCode::UNAUTHORIZED,
+                        json!({ "error": "invalid_client", "error_description": "bad secret" }),
+                    )
                 }
             }
             (_, ["graph", app]) if app.starts_with("applications(appId=") => {
                 if !bearer(&h).starts_with("az-") {
                     return err(StatusCode::UNAUTHORIZED, json!({}));
                 }
-                let creds: Vec<Value> = f.azure_ok.iter().map(|s| json!({ "keyId": format!("k-{}", &s[..3]), "hint": &s[..3] })).collect();
+                let creds: Vec<Value> = f
+                    .azure_ok
+                    .iter()
+                    .map(|s| json!({ "keyId": format!("k-{}", &s[..3]), "hint": &s[..3] }))
+                    .collect();
                 ok(json!({ "id": "obj1", "passwordCredentials": creds }))
             }
             ("POST", ["graph", app, action]) if app.starts_with("applications(appId=") => match *action {
@@ -789,7 +1233,11 @@ mod fake {
             ("POST", ["gtoken"]) => {
                 let fm = form(&body);
                 let jwt = fm.iter().find(|(k, _)| k == "assertion").map(|x| x.1.clone()).unwrap_or_default();
-                if jwt.split('.').count() == 3 { ok(json!({ "access_token": "g-access" })) } else { err(StatusCode::BAD_REQUEST, json!({})) }
+                if jwt.split('.').count() == 3 {
+                    ok(json!({ "access_token": "g-access" }))
+                } else {
+                    err(StatusCode::BAD_REQUEST, json!({}))
+                }
             }
             ("GET", ["gkeys", "keys:lookupKey"]) if query.starts_with("keyString=") => {
                 ok(json!({ "name": "projects/123/locations/global/keys/oldkey", "parent": "projects/123" }))
@@ -802,7 +1250,9 @@ mod fake {
                 "name": "operations/op1", "done": true,
                 "response": { "keyString": format!("AIza{}", "N".repeat(35)), "name": "projects/123/locations/global/keys/newkey" }
             })),
-            ("DELETE", ["gkeys", "projects", "123", "locations", "global", "keys", _]) => ok(json!({ "name": "operations/op2", "done": true })),
+            ("DELETE", ["gkeys", "projects", "123", "locations", "global", "keys", _]) => {
+                ok(json!({ "name": "operations/op2", "done": true }))
+            }
             // GitHub
             ("POST", ["gh", "app", "installations", "42", "access_tokens"]) => {
                 if bearer(&h).split('.').count() != 3 {
@@ -813,12 +1263,17 @@ mod fake {
             }
             // Slack
             ("POST", ["slack", "oauth.v2.access"]) => {
-                if !h.get("authorization").is_some_and(|v| v.to_str().unwrap_or("").starts_with("Basic ")) {
+                if !h
+                    .get("authorization")
+                    .is_some_and(|v| v.to_str().unwrap_or("").starts_with("Basic "))
+                {
                     return ok(json!({ "ok": false, "error": "invalid_client" }));
                 }
                 f.slack_n += 1;
                 let n = f.slack_n;
-                ok(json!({ "ok": true, "access_token": format!("xoxe.xoxb-access{n}"), "refresh_token": format!("xoxe-1-refresh{n}{}", "r".repeat(20)), "expires_in": 43200 }))
+                ok(
+                    json!({ "ok": true, "access_token": format!("xoxe.xoxb-access{n}"), "refresh_token": format!("xoxe-1-refresh{n}{}", "r".repeat(20)), "expires_in": 43200 }),
+                )
             }
             // Anthropic
             ("GET", ["an", "models"]) => ok(json!({ "data": [] })),
@@ -830,7 +1285,10 @@ mod fake {
                 "has_more": false
             })),
             ("POST", ["an", "organizations", "api_keys", _]) => ok(json!({ "status": f.last_body["status"] })),
-            _ => err(StatusCode::NOT_FOUND, json!({ "error": { "message": format!("fake has no {m} {path}") } })),
+            _ => err(
+                StatusCode::NOT_FOUND,
+                json!({ "error": { "message": format!("fake has no {m} {path}") } }),
+            ),
         }
     }
 
@@ -862,12 +1320,23 @@ async fn value_of(app: &AppRef, s: &Session, name: &str) -> String {
 }
 
 async fn rotate(app: &AppRef, s: &Session, name: &str, body: Option<Value>) -> Resp {
-    call(app, LAPTOP, "POST", &format!("/v1/secrets/{name}/rotate"), &s.hdrs(), Some(body.unwrap_or(json!({})))).await
+    call(
+        app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/secrets/{name}/rotate"),
+        &s.hdrs(),
+        Some(body.unwrap_or(json!({}))),
+    )
+    .await
 }
 
 /// Pretends the grace period is over and runs the scheduler once.
 async fn end_grace(app: &AppRef) {
-    app.db.raw().execute("UPDATE rotations SET revoke_after = 0 WHERE state = 'grace'", []).unwrap();
+    app.db
+        .raw()
+        .execute("UPDATE rotations SET revoke_after = 0 WHERE state = 'grace'", [])
+        .unwrap();
     crate::rotate::tick(app).await;
 }
 
@@ -877,8 +1346,16 @@ async fn openrouter_keys_rotate_through_the_management_key() {
     let app = test_app_with(ep);
     let s = setup(&app).await;
     let old = format!("sk-or-v1-{}", "a".repeat(64));
-    f.lock().unwrap().or_keys = vec![("oldhash".into(), old.clone()), ("other".into(), format!("sk-or-v1-{}", "b".repeat(64)))];
-    add_with(&app, &s, json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) })).await;
+    f.lock().unwrap().or_keys = vec![
+        ("oldhash".into(), old.clone()),
+        ("other".into(), format!("sk-or-v1-{}", "b".repeat(64))),
+    ];
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) }),
+    )
+    .await;
     let r = add_with(&app, &s, json!({ "name": "OR_APP", "value": old })).await;
     assert_eq!(r.body["rotation"]["mode"], "auto");
     assert_eq!(r.body["rotation"]["ready"], false, "no manager yet");
@@ -886,7 +1363,15 @@ async fn openrouter_keys_rotate_through_the_management_key() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{:?}", r.body);
     assert!(r.body["error"].as_str().unwrap().contains("manager"));
 
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/OR_APP", &s.hdrs(), Some(json!({ "parent": "OPENROUTER_MANAGEMENT_KEY" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OR_APP",
+        &s.hdrs(),
+        Some(json!({ "parent": "OPENROUTER_MANAGEMENT_KEY" })),
+    )
+    .await;
     assert_eq!(r.body["rotation"]["ready"], true);
     let r = rotate(&app, &s, "OR_APP", None).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
@@ -898,20 +1383,29 @@ async fn openrouter_keys_rotate_through_the_management_key() {
     {
         let f = f.lock().unwrap();
         assert!(f.calls.contains(&"POST /or/keys".to_string()));
-        assert!(f.or_keys.iter().any(|k| k.0 == "oldhash"), "old key still works during the grace period");
+        assert!(
+            f.or_keys.iter().any(|k| k.0 == "oldhash"),
+            "old key still works during the grace period"
+        );
     }
     // A second rotation can't start while the first is in its grace period.
     assert_eq!(rotate(&app, &s, "OR_APP", None).await.status, StatusCode::CONFLICT);
 
     end_grace(&app).await;
     let f2 = f.lock().unwrap();
-    assert!(!f2.or_keys.iter().any(|k| k.0 == "oldhash"), "old key revoked after the grace period");
+    assert!(
+        !f2.or_keys.iter().any(|k| k.0 == "oldhash"),
+        "old key revoked after the grace period"
+    );
     assert!(f2.or_keys.iter().any(|k| k.0 == "other"), "other keys untouched");
     drop(f2);
     let rows = app.db.rotations_recent(None, 10).unwrap();
     assert_eq!(rows[0].state, "done");
     let meta = app.db.secret_get("OR_APP").unwrap().unwrap();
-    assert!(app.db.version_ciphertext(meta.id, 1).unwrap().is_none(), "the old ciphertext is erased");
+    assert!(
+        app.db.version_ciphertext(meta.id, 1).unwrap().is_none(),
+        "the old ciphertext is erased"
+    );
     assert!(meta.rotated_at.is_some());
 }
 
@@ -923,14 +1417,30 @@ async fn failed_rotation_keeps_the_old_key() {
     let old = format!("sk-or-v1-{}", "a".repeat(64));
     f.lock().unwrap().or_keys = vec![("oldhash".into(), old.clone())];
     f.lock().unwrap().fail_create = true;
-    add_with(&app, &s, json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) })).await;
-    add_with(&app, &s, json!({ "name": "OR_APP", "value": old, "parent": "OPENROUTER_MANAGEMENT_KEY" })).await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) }),
+    )
+    .await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "OR_APP", "value": old, "parent": "OPENROUTER_MANAGEMENT_KEY" }),
+    )
+    .await;
     let r = rotate(&app, &s, "OR_APP", None).await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY);
     assert!(r.body["error"].as_str().unwrap().contains("old key is still in use"));
     assert_eq!(value_of(&app, &s, "OR_APP").await, old);
     let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await;
-    assert!(a.body["items"].as_array().unwrap().iter().any(|i| i["secret"] == "OR_APP" && i["reason"].as_str().unwrap().contains("failed")));
+    assert!(
+        a.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["secret"] == "OR_APP" && i["reason"].as_str().unwrap().contains("failed"))
+    );
 }
 
 #[tokio::test]
@@ -955,7 +1465,12 @@ async fn azure_client_secrets_rotate_themselves() {
     let s = setup(&app).await;
     let old = format!("abc8Q~{}", "O".repeat(34));
     f.lock().unwrap().azure_ok = vec![old.clone()];
-    let r = add_with(&app, &s, json!({ "name": "AZ_BOT", "value": old, "fields": { "tenant_id": "tenant-1", "client_id": "app-1" } })).await;
+    let r = add_with(
+        &app,
+        &s,
+        json!({ "name": "AZ_BOT", "value": old, "fields": { "tenant_id": "tenant-1", "client_id": "app-1" } }),
+    )
+    .await;
     assert_eq!(r.body["provider"], "azure-app-secret");
     let r = rotate(&app, &s, "AZ_BOT", None).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
@@ -972,14 +1487,28 @@ async fn tailscale_auth_keys_are_replaced_with_the_same_tags() {
     let (ep, f) = fake::start().await;
     let app = test_app_with(ep);
     let s = setup(&app).await;
-    add_with(&app, &s, json!({ "name": "TS_OAUTH", "value": format!("tskey-client-kc1-{}", "s".repeat(30)), "fields": { "client_id": "cid" } })).await;
-    let r = add_with(&app, &s, json!({ "name": "TS_AUTHKEY", "value": format!("tskey-auth-kOLD123-{}", "o".repeat(30)), "parent": "TS_OAUTH" })).await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "TS_OAUTH", "value": format!("tskey-client-kc1-{}", "s".repeat(30)), "fields": { "client_id": "cid" } }),
+    )
+    .await;
+    let r = add_with(
+        &app,
+        &s,
+        json!({ "name": "TS_AUTHKEY", "value": format!("tskey-auth-kOLD123-{}", "o".repeat(30)), "parent": "TS_OAUTH" }),
+    )
+    .await;
     assert_eq!(r.body["rotation"]["ready"], true);
     let r = rotate(&app, &s, "TS_AUTHKEY", None).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert!(value_of(&app, &s, "TS_AUTHKEY").await.starts_with("tskey-auth-kNEW456-"));
     let body = f.lock().unwrap().last_body.clone();
-    assert_eq!(body["capabilities"]["devices"]["create"]["tags"], json!(["tag:fw"]), "tags copied from the old key");
+    assert_eq!(
+        body["capabilities"]["devices"]["create"]["tags"],
+        json!(["tag:fw"]),
+        "tags copied from the old key"
+    );
     end_grace(&app).await;
     assert!(f.lock().unwrap().calls.contains(&"DELETE /ts/tailnet/-/keys/kOLD123".to_string()));
 }
@@ -1001,14 +1530,29 @@ async fn google_api_keys_rotate_with_a_service_account_and_keep_restrictions() {
     let s = setup(&app).await;
     let sa = json!({ "type": (["service", "account"].join("_")), "client_email": "rot@p.iam.gserviceaccount.com", "private_key": test_pem(), "private_key_id": "k1" });
     add_with(&app, &s, json!({ "name": "GCP_ROTATOR", "value": sa.to_string() })).await;
-    let r = add_with(&app, &s, json!({ "name": "GOOGLE_API_KEY", "value": format!("AIza{}", "O".repeat(35)), "parent": "GCP_ROTATOR" })).await;
+    let r = add_with(
+        &app,
+        &s,
+        json!({ "name": "GOOGLE_API_KEY", "value": format!("AIza{}", "O".repeat(35)), "parent": "GCP_ROTATOR" }),
+    )
+    .await;
     assert_eq!(r.body["rotation"]["ready"], true);
     let r = rotate(&app, &s, "GOOGLE_API_KEY", None).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(value_of(&app, &s, "GOOGLE_API_KEY").await, format!("AIza{}", "N".repeat(35)));
-    assert!(f.lock().unwrap().calls.contains(&"POST /gkeys/projects/123/locations/global/keys".to_string()));
+    assert!(
+        f.lock()
+            .unwrap()
+            .calls
+            .contains(&"POST /gkeys/projects/123/locations/global/keys".to_string())
+    );
     end_grace(&app).await;
-    assert!(f.lock().unwrap().calls.contains(&"DELETE /gkeys/projects/123/locations/global/keys/oldkey".to_string()));
+    assert!(
+        f.lock()
+            .unwrap()
+            .calls
+            .contains(&"DELETE /gkeys/projects/123/locations/global/keys/oldkey".to_string())
+    );
 }
 
 #[tokio::test]
@@ -1017,18 +1561,30 @@ async fn anthropic_guided_rotation_disables_the_old_key_with_an_admin_key() {
     let app = test_app_with(ep);
     let s = setup(&app).await;
     let old = format!("sk-ant-api03-OLD{}oldA", "x".repeat(80));
-    add_with(&app, &s, json!({ "name": "ADMIN", "value": format!("sk-ant-admin01-{}", "q".repeat(60)) })).await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "ADMIN", "value": format!("sk-ant-admin01-{}", "q".repeat(60)) }),
+    )
+    .await;
     let r = add_with(&app, &s, json!({ "name": "CLAUDE", "value": old, "parent": "ADMIN" })).await;
     assert_eq!(r.body["rotation"]["mode"], "guided");
     assert_eq!(r.body["rotation"]["revokes_old"], true);
-    assert_eq!(rotate(&app, &s, "CLAUDE", None).await.status, StatusCode::BAD_REQUEST, "no API to create Anthropic keys");
+    assert_eq!(
+        rotate(&app, &s, "CLAUDE", None).await.status,
+        StatusCode::BAD_REQUEST,
+        "no API to create Anthropic keys"
+    );
     let r = rotate(&app, &s, "CLAUDE", Some(json!({ "value": old }))).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "same value");
     let new = format!("sk-ant-api03-NEW{}", "y".repeat(80));
     let r = rotate(&app, &s, "CLAUDE", Some(json!({ "value": new }))).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(r.body["rotation"]["state"], "grace");
-    assert!(f.lock().unwrap().calls.contains(&"GET /an/models".to_string()), "the new key was checked first");
+    assert!(
+        f.lock().unwrap().calls.contains(&"GET /an/models".to_string()),
+        "the new key was checked first"
+    );
     end_grace(&app).await;
     let f = f.lock().unwrap();
     assert!(f.calls.contains(&"POST /an/organizations/api_keys/apikey_old".to_string()));
@@ -1060,18 +1616,48 @@ async fn guided_rotation_without_an_api_waits_for_the_owner_and_can_roll_back() 
     assert!(a.body["items"].as_array().unwrap().iter().any(|i| i["action"] == "done"));
     app.sessions.make_stale();
     let r = call(&app, LAPTOP, "POST", &format!("/v1/rotations/{id}/done"), &s.hdrs(), None).await;
-    assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED, "erasing the old value needs a fresh passphrase");
-    call(&app, LAPTOP, "POST", "/v1/session/confirm", &s.hdrs(), Some(json!({ "passphrase": PASS }))).await;
+    assert_eq!(
+        r.status,
+        StatusCode::PRECONDITION_REQUIRED,
+        "erasing the old value needs a fresh passphrase"
+    );
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": PASS })),
+    )
+    .await;
     let r = call(&app, LAPTOP, "POST", &format!("/v1/rotations/{id}/done"), &s.hdrs(), None).await;
     assert_eq!(r.body["rotation"]["state"], "done");
     let meta = app.db.secret_get("NEXUS").unwrap().unwrap();
-    assert!(app.db.version_ciphertext(meta.id, 1).unwrap().is_none(), "old value erased once deleted by hand");
+    assert!(
+        app.db.version_ciphertext(meta.id, 1).unwrap().is_none(),
+        "old value erased once deleted by hand"
+    );
 
     // Only the owner, with a fresh passphrase, can rotate.
     let tok = token(&app, &s, &["write", "read"], &["*"], &[]).await;
-    assert_eq!(call(&app, SPARK, "POST", "/v1/secrets/NEXUS/rotate", &[("authorization", tok.as_str())], Some(json!({}))).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(
+            &app,
+            SPARK,
+            "POST",
+            "/v1/secrets/NEXUS/rotate",
+            &[("authorization", tok.as_str())],
+            Some(json!({}))
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
     app.sessions.make_stale();
-    assert_eq!(rotate(&app, &s, "NEXUS", Some(json!({ "value": "x-1234567890" }))).await.status, StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(
+        rotate(&app, &s, "NEXUS", Some(json!({ "value": "x-1234567890" }))).await.status,
+        StatusCode::PRECONDITION_REQUIRED
+    );
 }
 
 #[tokio::test]
@@ -1079,7 +1665,12 @@ async fn minted_credentials_github_app_and_slack() {
     let (ep, f) = fake::start().await;
     let app = test_app_with(ep);
     let s = setup(&app).await;
-    add_with(&app, &s, json!({ "name": "GH_APP", "value": test_pem(), "provider": "github-app", "fields": { "app_id": "999", "installation_id": "42" } })).await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "GH_APP", "value": test_pem(), "provider": "github-app", "fields": { "app_id": "999", "installation_id": "42" } }),
+    )
+    .await;
     let meta = app.db.secret_get("GH_APP").unwrap().unwrap();
     assert_eq!(meta.provider.as_deref(), Some("github-app"));
     let stored = app.reveal(&meta).unwrap();
@@ -1100,7 +1691,10 @@ async fn minted_credentials_github_app_and_slack() {
     let v = app.reveal(&meta2).unwrap();
     assert!(v.value.starts_with("xoxe-1-refresh1"));
     assert_eq!(v.get("client_secret"), Some("cs-1234567890"), "other parts kept");
-    assert!(app.db.version_ciphertext(meta.id, 1).unwrap().is_none(), "the spent refresh token is erased");
+    assert!(
+        app.db.version_ciphertext(meta.id, 1).unwrap().is_none(),
+        "the spent refresh token is erased"
+    );
 }
 
 #[tokio::test]
@@ -1119,7 +1713,11 @@ async fn scheduler_rotates_due_keys() {
     let rows = app.db.rotations_recent(None, 5).unwrap();
     assert_eq!(rows[0].actor, "keys (scheduler)");
     crate::rotate::tick(&app).await;
-    assert_eq!(app.db.rotations_recent(None, 5).unwrap().len(), 1, "and not again until the next due date");
+    assert_eq!(
+        app.db.rotations_recent(None, 5).unwrap().len(),
+        1,
+        "and not again until the next due date"
+    );
 }
 
 #[tokio::test]
@@ -1142,7 +1740,15 @@ async fn import_preview_and_commit() {
     .join("\n");
     // Tokens can't import.
     let tok = token(&app, &s, &["write"], &["*"], &[]).await;
-    let r = call(&app, SPARK, "POST", "/v1/import/preview", &[("authorization", tok.as_str())], Some(json!({ "text": text }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/import/preview",
+        &[("authorization", tok.as_str())],
+        Some(json!({ "text": text })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 
     let r = call(&app, LAPTOP, "POST", "/v1/import/preview", &s.hdrs(), Some(json!({ "text": text }))).await;
@@ -1153,7 +1759,17 @@ async fn import_preview_and_commit() {
     }
     let items = r.body["items"].as_array().unwrap().clone();
     let names: Vec<_> = items.iter().map(|i| i["name"].as_str().unwrap()).collect();
-    assert_eq!(names, vec!["OPENROUTER_MANAGEMENT_KEY", "OPENROUTER_CHATBOT_API_KEY", "GITHUB_TOKEN", "GITHUB_AGAIN_TOKEN", "N8N_API_KEY", "VPS_ROOT_PASSWORD"]);
+    assert_eq!(
+        names,
+        vec![
+            "OPENROUTER_MANAGEMENT_KEY",
+            "OPENROUTER_CHATBOT_API_KEY",
+            "GITHUB_TOKEN",
+            "GITHUB_AGAIN_TOKEN",
+            "N8N_API_KEY",
+            "VPS_ROOT_PASSWORD"
+        ]
+    );
     assert_eq!(items[1]["parent"], "OPENROUTER_MANAGEMENT_KEY");
     assert_eq!(items[3]["include"], false);
     assert_eq!(items[5]["owner_only"], true);
@@ -1173,7 +1789,15 @@ async fn import_preview_and_commit() {
     app.sessions.make_stale();
     let r = call(&app, LAPTOP, "POST", "/v1/import/commit", &s.hdrs(), Some(commit.clone())).await;
     assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED);
-    call(&app, LAPTOP, "POST", "/v1/session/confirm", &s.hdrs(), Some(json!({ "passphrase": PASS }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": PASS })),
+    )
+    .await;
     // The import id is single-use (and bound to the device that made it).
     let r = call(&app, LAPTOP, "POST", "/v1/import/commit", &s.hdrs(), Some(commit.clone())).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
@@ -1194,12 +1818,28 @@ async fn import_preview_and_commit() {
     assert!(docs.notes.contains("web-app project"));
     assert!(app.db.secret_get("VPS_ROOT_PASSWORD").unwrap().unwrap().owner_only);
     let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await;
-    let exposed = a.body["items"].as_array().unwrap().iter().filter(|i| i["reason"].as_str().unwrap().contains("plaintext")).count();
+    let exposed = a.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["reason"].as_str().unwrap().contains("plaintext"))
+        .count();
     assert_eq!(exposed, 5, "every imported key is flagged until replaced");
     // Replacing a value clears the flag.
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/GITHUB_DOCS_TOKEN", &s.hdrs(), Some(json!({ "value": format!("ghp_{}", "H".repeat(36)), "verify": false }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/GITHUB_DOCS_TOKEN",
+        &s.hdrs(),
+        Some(json!({ "value": format!("ghp_{}", "H".repeat(36)), "verify": false })),
+    )
+    .await;
     assert!(app.db.secret_get("GITHUB_DOCS_TOKEN").unwrap().unwrap().exposed.is_none());
-    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=500", &s.hdrs(), None).await.body.to_string();
+    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=500", &s.hdrs(), None)
+        .await
+        .body
+        .to_string();
     assert!(!ev.contains(&gh) && !ev.contains("Blue Kite"), "values never reach the log");
 }
 
@@ -1208,8 +1848,18 @@ async fn or_setup(f: &fake::FakeRef, app: &AppRef, s: &Session, in_account: bool
     if in_account {
         f.lock().unwrap().or_keys = vec![("oldhash".into(), old.clone())];
     }
-    add_with(app, s, json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) })).await;
-    add_with(app, s, json!({ "name": "OR_APP", "value": old, "parent": "OPENROUTER_MANAGEMENT_KEY" })).await;
+    add_with(
+        app,
+        s,
+        json!({ "name": "OPENROUTER_MANAGEMENT_KEY", "value": format!("sk-or-v1-{}", "m".repeat(64)) }),
+    )
+    .await;
+    add_with(
+        app,
+        s,
+        json!({ "name": "OR_APP", "value": old, "parent": "OPENROUTER_MANAGEMENT_KEY" }),
+    )
+    .await;
     old
 }
 
@@ -1225,16 +1875,40 @@ async fn managers_are_owner_only_and_must_be_the_right_kind() {
     // Tokens can't touch the manager, or change the value of a managed key.
     let tok = token(&app, &s, &["list", "write", "delete"], &["*"], &[]).await;
     let h = [("authorization", tok.as_str())];
-    let r = call(&app, SPARK, "PATCH", "/v1/secrets/OPENROUTER_MANAGEMENT_KEY", &h, Some(json!({ "value": "sk-or-v1-attacker" }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "PATCH",
+        "/v1/secrets/OPENROUTER_MANAGEMENT_KEY",
+        &h,
+        Some(json!({ "value": "sk-or-v1-attacker" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_eq!(call(&app, SPARK, "DELETE", "/v1/secrets/OPENROUTER_MANAGEMENT_KEY", &h, None).await.status, StatusCode::NOT_FOUND);
-    let r = call(&app, SPARK, "PATCH", "/v1/secrets/OR_APP", &h, Some(json!({ "value": format!("sk-or-v1-{}", "z".repeat(64)) }))).await;
+    assert_eq!(
+        call(&app, SPARK, "DELETE", "/v1/secrets/OPENROUTER_MANAGEMENT_KEY", &h, None)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    let r = call(
+        &app,
+        SPARK,
+        "PATCH",
+        "/v1/secrets/OR_APP",
+        &h,
+        Some(json!({ "value": format!("sk-or-v1-{}", "z".repeat(64)) })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "a token can't plant the key rotation will act on");
     let r = call(&app, SPARK, "GET", "/v1/secrets/OR_APP", &h, None).await;
     assert_eq!(r.body["parent"], Value::Null, "an owner-only manager isn't named to tokens");
 
     // A manager that lost owner-only, or is the wrong kind, is refused before anything is created.
-    app.db.raw().execute("UPDATE secrets SET owner_only = 0 WHERE name = 'OPENROUTER_MANAGEMENT_KEY'", []).unwrap();
+    app.db
+        .raw()
+        .execute("UPDATE secrets SET owner_only = 0 WHERE name = 'OPENROUTER_MANAGEMENT_KEY'", [])
+        .unwrap();
     let r = rotate(&app, &s, "OR_APP", None).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{:?}", r.body);
     assert!(r.body["error"].as_str().unwrap().contains("owner-only"));
@@ -1242,10 +1916,26 @@ async fn managers_are_owner_only_and_must_be_the_right_kind() {
     assert_eq!(rotate(&app, &s, "OR_APP", None).await.status, StatusCode::BAD_REQUEST);
     let r = call(&app, LAPTOP, "GET", "/v1/secrets/OR_APP", &s.hdrs(), None).await;
     assert_eq!(r.body["rotation"]["ready"], false, "a wrong-kind manager isn't shown as ready");
-    assert!(r.body["rotation"]["manager_problem"].as_str().unwrap().contains("isn't an OpenRouter management key"), "{:?}", r.body["rotation"]);
+    assert!(
+        r.body["rotation"]["manager_problem"]
+            .as_str()
+            .unwrap()
+            .contains("isn't an OpenRouter management key"),
+        "{:?}",
+        r.body["rotation"]
+    );
     let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await;
-    assert!(a.body["items"].as_array().unwrap().iter().any(|i| i["secret"] == "OR_APP" && i["reason"].as_str().unwrap().contains("can't rotate automatically")));
-    assert!(!f.lock().unwrap().calls.iter().any(|c| c.starts_with("POST")), "nothing was created at the provider");
+    assert!(
+        a.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["secret"] == "OR_APP" && i["reason"].as_str().unwrap().contains("can't rotate automatically"))
+    );
+    assert!(
+        !f.lock().unwrap().calls.iter().any(|c| c.starts_with("POST")),
+        "nothing was created at the provider"
+    );
     let rows = app.db.rotations_recent(None, 5).unwrap();
     assert!(rows.iter().all(|r| r.state == "failed"), "failed rotations don't stay 'running'");
 }
@@ -1258,11 +1948,28 @@ async fn rotation_refuses_keys_the_manager_cant_find() {
     or_setup(&f, &app, &s, false).await;
     let r = rotate(&app, &s, "OR_APP", None).await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY);
-    assert!(r.body["error"].as_str().unwrap().contains("management key's account"), "{:?}", r.body);
-    assert!(!f.lock().unwrap().calls.contains(&"POST /or/keys".to_string()), "no key made in the wrong account");
+    assert!(
+        r.body["error"].as_str().unwrap().contains("management key's account"),
+        "{:?}",
+        r.body
+    );
+    assert!(
+        !f.lock().unwrap().calls.contains(&"POST /or/keys".to_string()),
+        "no key made in the wrong account"
+    );
 
-    add_with(&app, &s, json!({ "name": "TS_OAUTH", "value": format!("tskey-client-kc1-{}", "s".repeat(30)), "fields": { "client_id": "cid" } })).await;
-    add_with(&app, &s, json!({ "name": "TS_KEY", "value": format!("tskey-auth-kMISSING9-{}", "o".repeat(30)), "parent": "TS_OAUTH" })).await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "TS_OAUTH", "value": format!("tskey-client-kc1-{}", "s".repeat(30)), "fields": { "client_id": "cid" } }),
+    )
+    .await;
+    add_with(
+        &app,
+        &s,
+        json!({ "name": "TS_KEY", "value": format!("tskey-auth-kMISSING9-{}", "o".repeat(30)), "parent": "TS_OAUTH" }),
+    )
+    .await;
     let r = rotate(&app, &s, "TS_KEY", None).await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{:?}", r.body);
     assert!(!f.lock().unwrap().calls.contains(&"POST /ts/tailnet/-/keys".to_string()));
@@ -1283,7 +1990,11 @@ async fn a_rolled_cloudflare_value_is_kept_even_if_its_check_fails() {
     let r = rotate(&app, &s, "CF", None).await;
     assert_eq!(r.status, StatusCode::BAD_GATEWAY);
     assert!(r.body["error"].as_str().unwrap().contains("new value is saved"), "{:?}", r.body);
-    assert_eq!(value_of(&app, &s, "CF").await, format!("cfut_{}", "R".repeat(44)), "the only working value isn't thrown away");
+    assert_eq!(
+        value_of(&app, &s, "CF").await,
+        format!("cfut_{}", "R".repeat(44)),
+        "the only working value isn't thrown away"
+    );
 }
 
 #[tokio::test]
@@ -1302,19 +2013,36 @@ async fn undo_and_revocation_never_hit_the_current_key() {
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(value_of(&app, &s, "OR_APP").await, old);
     end_grace(&app).await;
-    assert!(f.lock().unwrap().or_keys.iter().any(|k| k.0 == "oldhash"), "the restored key is still alive");
-    assert!(!f.lock().unwrap().or_keys.iter().any(|k| k.0 == "newhash"), "the key made by the undone rotation was revoked");
+    assert!(
+        f.lock().unwrap().or_keys.iter().any(|k| k.0 == "oldhash"),
+        "the restored key is still alive"
+    );
+    assert!(
+        !f.lock().unwrap().or_keys.iter().any(|k| k.0 == "newhash"),
+        "the key made by the undone rotation was revoked"
+    );
 
     // If the value changed after a rotation, it can't be undone and the vault revokes nothing.
     f.lock().unwrap().or_keys = vec![("oldhash".into(), old.clone())];
     let r = rotate(&app, &s, "OR_APP", None).await;
     let id = r.body["rotation"]["id"].as_i64().unwrap();
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/OR_APP", &s.hdrs(), Some(json!({ "value": format!("sk-or-v1-{}", "d".repeat(64)), "verify": false }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OR_APP",
+        &s.hdrs(),
+        Some(json!({ "value": format!("sk-or-v1-{}", "d".repeat(64)), "verify": false })),
+    )
+    .await;
     let r = call(&app, LAPTOP, "POST", &format!("/v1/rotations/{id}/rollback"), &s.hdrs(), None).await;
     assert_eq!(r.status, StatusCode::CONFLICT);
     end_grace(&app).await;
     assert_eq!(app.db.rotation_get(id).unwrap().unwrap().state, "manual_revoke");
-    assert!(f.lock().unwrap().or_keys.iter().any(|k| k.0 == "oldhash"), "nothing revoked when the key changed underneath");
+    assert!(
+        f.lock().unwrap().or_keys.iter().any(|k| k.0 == "oldhash"),
+        "nothing revoked when the key changed underneath"
+    );
 }
 
 #[tokio::test]
@@ -1323,10 +2051,22 @@ async fn rejected_keys_record_the_providers_reason_without_the_key() {
     let base = test_app_with(ep);
     let mut cfg = base.cfg.clone();
     cfg.describe.verify_with_provider = true;
-    let app = Arc::new(App { cfg, endpoints: base.endpoints.clone(), ..clone_app(&base) });
+    let app = Arc::new(App {
+        cfg,
+        endpoints: base.endpoints.clone(),
+        ..clone_app(&base)
+    });
     let s = setup(&app).await;
     let bad = format!("cfut_{}", "B".repeat(44));
-    let r = call(&app, LAPTOP, "POST", "/v1/secrets", &s.hdrs(), Some(json!({ "name": "CF", "value": bad, "verify": true }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/secrets",
+        &s.hdrs(),
+        Some(json!({ "name": "CF", "value": bad, "verify": true })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::CREATED);
     let mut v = Value::Null;
     for _ in 0..50 {
@@ -1359,20 +2099,47 @@ async fn changing_the_passphrase_flags_automatic_unlock_as_out_of_date() {
 
     // Off: nothing to warn about.
     let new = "a brand new passphrase";
-    let r = call(&app, LAPTOP, "POST", "/v1/passphrase", &s.hdrs(), Some(json!({ "current": PASS, "new": new }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/passphrase",
+        &s.hdrs(),
+        Some(json!({ "current": PASS, "new": new })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(r.body["auto_unlock_stale"], false);
 
     // On, and changed back to the stored passphrase: still fine.
     app.auto_unlock.set(AutoUnlock::ON);
-    let r = call(&app, LAPTOP, "POST", "/v1/passphrase", &s.hdrs(), Some(json!({ "current": new, "new": PASS }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/passphrase",
+        &s.hdrs(),
+        Some(json!({ "current": new, "new": PASS })),
+    )
+    .await;
     assert_eq!(r.body["auto_unlock_stale"], false);
     assert_eq!(call(&app, LAPTOP, "GET", "/v1/status", &[], None).await.body["auto_unlock"], "on");
 
     // On, and changed to something else: the next restart would stay locked.
-    let r = call(&app, LAPTOP, "POST", "/v1/passphrase", &s.hdrs(), Some(json!({ "current": PASS, "new": new }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/passphrase",
+        &s.hdrs(),
+        Some(json!({ "current": PASS, "new": new })),
+    )
+    .await;
     assert_eq!(r.body["auto_unlock_stale"], true);
-    assert_eq!(call(&app, LAPTOP, "GET", "/v1/status", &[], None).await.body["auto_unlock"], "stale");
+    assert_eq!(
+        call(&app, LAPTOP, "GET", "/v1/status", &[], None).await.body["auto_unlock"],
+        "stale"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1382,21 +2149,38 @@ async fn tokens_can_be_edited_and_changes_apply_at_once() {
     let s = setup(&app).await;
     add(&app, &s, "K", "value-123456789").await;
     add(&app, &s, "NO_TARGET", "plain-value-without-a-provider").await;
-    let r = call(&app, LAPTOP, "POST", "/v1/tokens", &s.hdrs(), Some(json!({ "name": "agent", "scopes": ["list", "proxy"], "proxy_get_only": true }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/tokens",
+        &s.hdrs(),
+        Some(json!({ "name": "agent", "scopes": ["list", "proxy"], "proxy_get_only": true })),
+    )
+    .await;
     let id = r.body["id"].as_i64().unwrap();
     let tok = format!("Bearer {}", r.body["token"].as_str().unwrap());
     let t = [("authorization", tok.as_str())];
     let path = format!("/v1/tokens/{id}");
 
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets/K/value", &t, None).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(call(&app, SPARK, "POST", "/v1/proxy/NO_TARGET/x", &t, None).await.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets/K/value", &t, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, SPARK, "POST", "/v1/proxy/NO_TARGET/x", &t, None).await.status,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
 
     // Add read, allow changes through the proxy, rename it.
     let edit = json!({ "name": "agent v2", "scopes": ["list", "proxy", "read"], "secrets": ["*"], "nodes": [], "proxy_get_only": false });
     let r = call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(edit.clone())).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     assert_eq!(r.body["token"]["name"], "agent v2");
-    assert!(r.body["token"].get("hash").is_none() && r.body.get("token").is_some_and(|t| !t.is_string()), "never returns the token or its hash");
+    assert!(
+        r.body["token"].get("hash").is_none() && r.body.get("token").is_some_and(|t| !t.is_string()),
+        "never returns the token or its hash"
+    );
     // Same token string, new powers, no restart or re-setup.
     let r = call(&app, SPARK, "GET", "/v1/secrets/K/value", &t, None).await;
     assert_eq!(r.status, StatusCode::OK);
@@ -1406,30 +2190,88 @@ async fn tokens_can_be_edited_and_changes_apply_at_once() {
 
     // Narrow it again: limited to other keys and another machine.
     let narrow = json!({ "name": "agent v2", "scopes": ["list"], "secrets": ["OTHER_*"], "nodes": ["laptop"], "proxy_get_only": true });
-    assert_eq!(call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(narrow)).await.status, StatusCode::OK);
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets/K/value", &t, None).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(narrow)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets/K/value", &t, None).await.status,
+        StatusCode::FORBIDDEN
+    );
 
     // The change is in the audit log, old -> new.
     let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=50", &s.hdrs(), None).await;
-    let upd: Vec<&Value> = ev.body["events"].as_array().unwrap().iter().filter(|e| e["action"] == "token.update").collect();
+    let upd: Vec<&Value> = ev.body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["action"] == "token.update")
+        .collect();
     assert_eq!(upd.len(), 2);
-    assert!(upd.iter().any(|e| e["detail"].as_str().unwrap().contains("[list,proxy] keys * machines any GET-only -> [list,proxy,read]")), "{upd:?}");
+    assert!(
+        upd.iter().any(|e| e["detail"]
+            .as_str()
+            .unwrap()
+            .contains("[list,proxy] keys * machines any GET-only -> [list,proxy,read]")),
+        "{upd:?}"
+    );
 
     // Bad input, stale passphrase, a token editing itself, revoked tokens.
-    let bad = call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(json!({ "name": "x", "scopes": ["root"] }))).await;
+    let bad = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        &path,
+        &s.hdrs(),
+        Some(json!({ "name": "x", "scopes": ["root"] })),
+    )
+    .await;
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     let bad = call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(json!({ "name": "x", "scopes": [] }))).await;
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     let writer = token(&app, &s, &["list", "proxy", "read", "write", "delete"], &["*"], &[]).await;
-    let r = call(&app, SPARK, "PATCH", &path, &[("authorization", writer.as_str())], Some(edit.clone())).await;
-    assert!(r.status == StatusCode::FORBIDDEN || r.status == StatusCode::UNAUTHORIZED, "tokens can't edit tokens: {}", r.status);
+    let r = call(
+        &app,
+        SPARK,
+        "PATCH",
+        &path,
+        &[("authorization", writer.as_str())],
+        Some(edit.clone()),
+    )
+    .await;
+    assert!(
+        r.status == StatusCode::FORBIDDEN || r.status == StatusCode::UNAUTHORIZED,
+        "tokens can't edit tokens: {}",
+        r.status
+    );
     app.sessions.make_stale();
-    assert_eq!(call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(edit.clone())).await.status, StatusCode::PRECONDITION_REQUIRED);
-    call(&app, LAPTOP, "POST", "/v1/session/confirm", &s.hdrs(), Some(json!({ "passphrase": PASS }))).await;
+    assert_eq!(
+        call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(edit.clone())).await.status,
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": PASS })),
+    )
+    .await;
     assert_eq!(call(&app, LAPTOP, "DELETE", &path, &s.hdrs(), None).await.status, StatusCode::OK);
-    assert_eq!(call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(edit.clone())).await.status, StatusCode::NOT_FOUND, "revoked stays revoked");
-    assert_eq!(call(&app, LAPTOP, "PATCH", "/v1/tokens/9999", &s.hdrs(), Some(edit)).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets", &t, None).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&app, LAPTOP, "PATCH", &path, &s.hdrs(), Some(edit.clone())).await.status,
+        StatusCode::NOT_FOUND,
+        "revoked stays revoked"
+    );
+    assert_eq!(
+        call(&app, LAPTOP, "PATCH", "/v1/tokens/9999", &s.hdrs(), Some(edit)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets", &t, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -1439,17 +2281,47 @@ async fn attention_items_can_be_okd_until_the_situation_changes() {
     add(&app, &s, "K", "value-123456789").await;
     add(&app, &s, "OTHER", "other-value-12345").await;
     let soon = crate::db::now_ms() + 5 * 86_400_000;
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/K", &s.hdrs(), Some(json!({ "exposed": "Was in a plaintext file", "expires_at": soon }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/K",
+        &s.hdrs(),
+        Some(json!({ "exposed": "Was in a plaintext file", "expires_at": soon })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/OTHER", &s.hdrs(), Some(json!({ "exposed": "also leaked" }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OTHER",
+        &s.hdrs(),
+        Some(json!({ "exposed": "also leaked" })),
+    )
+    .await;
     let kinds = |b: &Value, list: &str, name: &str| -> Vec<String> {
-        b[list].as_array().unwrap().iter().filter(|i| i["secret"] == name).map(|i| i["kind"].as_str().unwrap().to_string()).collect()
+        b[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["secret"] == name)
+            .map(|i| i["kind"].as_str().unwrap().to_string())
+            .collect()
     };
     let att = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
     assert_eq!(kinds(&att, "items", "K"), ["exposed", "expiring"]);
 
     // OK hides K's items (and only K's), and is logged.
-    let r = call(&app, LAPTOP, "POST", "/v1/attention/dismiss", &s.hdrs(), Some(json!({ "secret": "K" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/attention/dismiss",
+        &s.hdrs(),
+        Some(json!({ "secret": "K" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
     let att = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
     assert!(kinds(&att, "items", "K").is_empty());
@@ -1458,35 +2330,109 @@ async fn attention_items_can_be_okd_until_the_situation_changes() {
     let d = call(&app, LAPTOP, "GET", "/v1/dashboard?range=24h", &s.hdrs(), None).await.body;
     assert_eq!(d["attention"]["total"], 1, "the dashboard count leaves OK'd items out");
     let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=20", &s.hdrs(), None).await.body;
-    assert!(ev["events"].as_array().unwrap().iter().any(|e| e["action"] == "attention.dismiss" && e["detail"] == "exposed,expiring"));
+    assert!(
+        ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["action"] == "attention.dismiss" && e["detail"] == "exposed,expiring")
+    );
 
     // A different expiry date is a new situation: that item comes back, the other stays OK'd.
     let later = soon + 86_400_000;
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/K", &s.hdrs(), Some(json!({ "expires_at": later }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/K",
+        &s.hdrs(),
+        Some(json!({ "expires_at": later })),
+    )
+    .await;
     let att = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
     assert_eq!(kinds(&att, "items", "K"), ["expiring"]);
     assert_eq!(kinds(&att, "dismissed", "K"), ["exposed"]);
 
     // Restore brings everything back.
-    let r = call(&app, LAPTOP, "POST", "/v1/attention/restore", &s.hdrs(), Some(json!({ "secret": "K" }))).await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/attention/restore",
+        &s.hdrs(),
+        Some(json!({ "secret": "K" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK);
     let att = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
     assert_eq!(kinds(&att, "items", "K"), ["exposed", "expiring"]);
     assert!(kinds(&att, "dismissed", "K").is_empty());
 
     // OK'd as exposed, then flagged again on a new version: it's back.
-    call(&app, LAPTOP, "POST", "/v1/attention/dismiss", &s.hdrs(), Some(json!({ "secret": "K" }))).await;
-    let r = call(&app, LAPTOP, "PATCH", "/v1/secrets/K", &s.hdrs(), Some(json!({ "value": "new-value-987654321" }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/attention/dismiss",
+        &s.hdrs(),
+        Some(json!({ "secret": "K" })),
+    )
+    .await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/K",
+        &s.hdrs(),
+        Some(json!({ "value": "new-value-987654321" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/K", &s.hdrs(), Some(json!({ "exposed": "leaked again" }))).await;
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/K",
+        &s.hdrs(),
+        Some(json!({ "exposed": "leaked again" })),
+    )
+    .await;
     let att = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
     assert_eq!(kinds(&att, "items", "K"), ["exposed"], "a new version is a new situation");
 
     // Owner only; nothing to OK is a 404.
     let tok = token(&app, &s, &["list", "proxy", "read", "write", "delete"], &["*"], &[]).await;
-    let r = call(&app, SPARK, "POST", "/v1/attention/dismiss", &[("authorization", tok.as_str())], Some(json!({ "secret": "OTHER" }))).await;
-    assert!(r.status == StatusCode::FORBIDDEN || r.status == StatusCode::UNAUTHORIZED, "{}", r.status);
-    call(&app, LAPTOP, "PATCH", "/v1/secrets/OTHER", &s.hdrs(), Some(json!({ "exposed": "" }))).await;
-    let r = call(&app, LAPTOP, "POST", "/v1/attention/dismiss", &s.hdrs(), Some(json!({ "secret": "OTHER" }))).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/attention/dismiss",
+        &[("authorization", tok.as_str())],
+        Some(json!({ "secret": "OTHER" })),
+    )
+    .await;
+    assert!(
+        r.status == StatusCode::FORBIDDEN || r.status == StatusCode::UNAUTHORIZED,
+        "{}",
+        r.status
+    );
+    call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OTHER",
+        &s.hdrs(),
+        Some(json!({ "exposed": "" })),
+    )
+    .await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/attention/dismiss",
+        &s.hdrs(),
+        Some(json!({ "secret": "OTHER" })),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }

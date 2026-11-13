@@ -31,7 +31,10 @@ pub struct Session {
 /// Drops expired import sessions (run every minute), so pasted values don't
 /// sit in memory longer than needed.
 pub fn prune(app: &AppRef) {
-    app.imports.lock().unwrap_or_else(|p| p.into_inner()).retain(|_, s| s.created.elapsed() < SESSION_TTL);
+    app.imports
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|_, s| s.created.elapsed() < SESSION_TTL);
 }
 
 #[derive(Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -51,8 +54,7 @@ pub async fn preview(
         return Err(ApiError::bad_request("that's more than 1 MiB of text"));
     }
     let parsed = import::parse(&body.text);
-    let existing: Vec<(String, Option<String>)> =
-        app.db.secret_list()?.into_iter().map(|m| (m.name, m.provider)).collect();
+    let existing: Vec<(String, Option<String>)> = app.db.secret_list()?.into_iter().map(|m| (m.name, m.provider)).collect();
     let items = import::propose(&parsed, &existing, |v| app.duplicate_of(v, None).ok().flatten());
     let id = hex::encode(crate::crypto::random_bytes::<16>());
     {
@@ -65,7 +67,14 @@ pub async fn preview(
                 None => break,
             };
         }
-        map.insert(id.clone(), Session { created: Instant::now(), node_id: caller.node_id.clone(), candidates: parsed.candidates });
+        map.insert(
+            id.clone(),
+            Session {
+                created: Instant::now(),
+                node_id: caller.node_id.clone(),
+                candidates: parsed.candidates,
+            },
+        );
     }
     let ev = EventInfo::new("import.preview", "owner (web)").detail(format!("{} candidates", items.len()));
     Ok(with_event(
@@ -160,11 +169,24 @@ pub async fn commit(
     let created = results.iter().filter(|r| r["status"] == "created").count();
     let failed = results.iter().filter(|r| r["status"] == "error").count();
     let ev = EventInfo::new("import.commit", "owner (web)").detail(format!("{created} created, {failed} failed"));
-    Ok(with_event(Json(json!({ "created": created, "failed": failed, "results": results })), ev))
+    Ok(with_event(
+        Json(json!({ "created": created, "failed": failed, "results": results })),
+        ev,
+    ))
 }
 
-fn commit_one(app: &AppRef, session: &Session, item: &CommitItem, name: &str, mark_exposed: bool, today: &str) -> ApiResult<Option<String>> {
-    let c = session.candidates.get(item.id).ok_or_else(|| ApiError::bad_request("unknown item"))?;
+fn commit_one(
+    app: &AppRef,
+    session: &Session,
+    item: &CommitItem,
+    name: &str,
+    mark_exposed: bool,
+    today: &str,
+) -> ApiResult<Option<String>> {
+    let c = session
+        .candidates
+        .get(item.id)
+        .ok_or_else(|| ApiError::bad_request("unknown item"))?;
     if !server::valid_name(name) {
         return Err(ApiError::bad_request("names may use letters, digits, '_', '-' and '.'"));
     }
@@ -184,7 +206,10 @@ fn commit_one(app: &AppRef, session: &Session, item: &CommitItem, name: &str, ma
         provider: item.provider.clone(),
         parent: item.parent.clone(),
         exposed: mark_exposed.then(|| format!("Was stored in a plaintext file (imported {today}). Replace it.")),
-        proxy: item.base_url.as_ref().filter(|b| !b.trim().is_empty()).map(|b| ProxyBody { base_url: Some(b.clone()), auth: None }),
+        proxy: item.base_url.as_ref().filter(|b| !b.trim().is_empty()).map(|b| ProxyBody {
+            base_url: Some(b.clone()),
+            auth: None,
+        }),
         ..Default::default()
     };
     let settings = sb.to_settings(app, name)?;

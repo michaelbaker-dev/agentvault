@@ -69,7 +69,10 @@ pub enum Principal {
     /// but revealing values, creating tokens, redirecting the proxy and deleting
     /// need a recent passphrase confirmation (`fresh`), so a stolen cookie alone
     /// can't extract keys.
-    Owner { session: [u8; 32], fresh: bool },
+    Owner {
+        session: [u8; 32],
+        fresh: bool,
+    },
     Token(TokenGrant),
 }
 
@@ -204,7 +207,13 @@ impl Sessions {
         map.retain(|_, s| s.last_seen.elapsed() < SESSION_IDLE && s.created.elapsed() < SESSION_MAX);
         map.insert(
             sha256(cookie.as_bytes()),
-            Session { csrf: csrf.clone(), node: node.to_string(), created: now, last_seen: now, verified: now },
+            Session {
+                csrf: csrf.clone(),
+                node: node.to_string(),
+                created: now,
+                last_seen: now,
+                verified: now,
+            },
         );
         (cookie, csrf)
     }
@@ -219,7 +228,11 @@ impl Sessions {
             return None;
         }
         s.last_seen = Instant::now();
-        Some(SessionInfo { id, csrf: s.csrf.clone(), fresh: s.verified.elapsed() < FRESH_FOR })
+        Some(SessionInfo {
+            id,
+            csrf: s.csrf.clone(),
+            fresh: s.verified.elapsed() < FRESH_FOR,
+        })
     }
 
     /// Records a fresh passphrase confirmation for this session.

@@ -108,7 +108,9 @@ impl MintCache {
 
     fn get(&self, id: i64, version: i64) -> Option<Zeroizing<String>> {
         let map = self.tokens.lock().unwrap_or_else(|p| p.into_inner());
-        map.get(&(id, version)).filter(|(_, until)| *until > Instant::now()).map(|(t, _)| t.clone())
+        map.get(&(id, version))
+            .filter(|(_, until)| *until > Instant::now())
+            .map(|(t, _)| t.clone())
     }
 
     fn put(&self, id: i64, version: i64, token: Zeroizing<String>, valid_for: Duration) {
@@ -120,7 +122,10 @@ impl MintCache {
     }
 
     pub fn forget(&self, id: i64) {
-        self.tokens.lock().unwrap_or_else(|p| p.into_inner()).retain(|(sid, _), _| *sid != id);
+        self.tokens
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(sid, _), _| *sid != id);
     }
 
     /// Drops every minted token (when the vault is locked).
@@ -222,7 +227,11 @@ fn revoker(p: &Provider) -> Option<&'static str> {
 
 fn safe_seg(s: &str) -> Result<&str, String> {
     let ok = (1..=128).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~'));
-    if ok { Ok(s) } else { Err("an ID returned or stored for this key has unexpected characters".into()) }
+    if ok {
+        Ok(s)
+    } else {
+        Err("an ID returned or stored for this key has unexpected characters".into())
+    }
 }
 
 fn field<'a>(m: &'a SecretMeta, name: &str) -> Result<&'a str, String> {
@@ -242,11 +251,18 @@ fn form(pairs: &[(&str, &str)]) -> String {
 }
 
 fn error_text(v: &Value) -> String {
-    ["/error/message", "/error_description", "/error", "/errors/0/message", "/message", "/detail"]
-        .iter()
-        .find_map(|p| v.pointer(p).and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string()
+    [
+        "/error/message",
+        "/error_description",
+        "/error",
+        "/errors/0/message",
+        "/message",
+        "/detail",
+    ]
+    .iter()
+    .find_map(|p| v.pointer(p).and_then(Value::as_str))
+    .unwrap_or("")
+    .to_string()
 }
 
 /// Sends a request and returns the JSON body, or an error that names the
@@ -255,12 +271,23 @@ async fn send_json(rb: reqwest::RequestBuilder, what: &str, secrets: &[&str]) ->
     let r = Redactor::new(secrets);
     // Redact the whole text first, then shorten it, so a secret cut at the
     // edge can't slip through.
-    let clean = |s: String| String::from_utf8_lossy(&r.redact(s.as_bytes())).chars().take(300).collect::<String>();
-    let resp = rb.timeout(HTTP_TIMEOUT).send().await.map_err(|_| format!("{what}: couldn't reach the provider"))?;
+    let clean = |s: String| {
+        String::from_utf8_lossy(&r.redact(s.as_bytes()))
+            .chars()
+            .take(300)
+            .collect::<String>()
+    };
+    let resp = rb
+        .timeout(HTTP_TIMEOUT)
+        .send()
+        .await
+        .map_err(|_| format!("{what}: couldn't reach the provider"))?;
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
-        return Err(clean(format!("{what}: HTTP {} {}", status.as_u16(), error_text(&body)).trim().to_string()));
+        return Err(clean(
+            format!("{what}: HTTP {} {}", status.as_u16(), error_text(&body)).trim().to_string(),
+        ));
     }
     if body.get("ok") == Some(&Value::Bool(false)) || body.get("success") == Some(&Value::Bool(false)) {
         return Err(clean(format!("{what}: {}", error_text(&body))));
@@ -269,7 +296,10 @@ async fn send_json(rb: reqwest::RequestBuilder, what: &str, secrets: &[&str]) ->
 }
 
 fn str_at<'a>(v: &'a Value, ptr: &str, what: &str) -> Result<&'a str, String> {
-    v.pointer(ptr).and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| format!("{what}: the reply had no {ptr}"))
+    v.pointer(ptr)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("{what}: the reply had no {ptr}"))
 }
 
 // ---------------------------------------------------------------- RS256 JWTs
@@ -280,11 +310,17 @@ fn pem_der(pem: &str) -> Result<(bool, Zeroizing<Vec<u8>>), String> {
     if !pkcs8 && !rsa {
         return Err("expected an RSA private key in PEM format".into());
     }
-    let body: Zeroizing<String> =
-        Zeroizing::new(pem.lines().map(str::trim).filter(|l| !l.starts_with("-----") && !l.is_empty()).collect());
+    let body: Zeroizing<String> = Zeroizing::new(
+        pem.lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("-----") && !l.is_empty())
+            .collect(),
+    );
     // Service account JSON stores the key with literal "\n" sequences.
     let body = Zeroizing::new(body.replace("\\n", ""));
-    let der = base64::engine::general_purpose::STANDARD.decode(body.as_bytes()).map_err(|_| "the private key isn't valid PEM")?;
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body.as_bytes())
+        .map_err(|_| "the private key isn't valid PEM")?;
     Ok((pkcs8, Zeroizing::new(der)))
 }
 
@@ -294,15 +330,24 @@ fn b64url(b: &[u8]) -> String {
 
 pub fn sign_rs256(pem: &str, claims: &Value, kid: Option<&str>) -> Result<Zeroizing<String>, String> {
     let (pkcs8, der) = pem_der(pem)?;
-    let key = if pkcs8 { signature::RsaKeyPair::from_pkcs8(&der) } else { signature::RsaKeyPair::from_der(&der) }
-        .map_err(|_| "the private key was rejected (needs RSA, 2048 bits or more)".to_string())?;
+    let key = if pkcs8 {
+        signature::RsaKeyPair::from_pkcs8(&der)
+    } else {
+        signature::RsaKeyPair::from_der(&der)
+    }
+    .map_err(|_| "the private key was rejected (needs RSA, 2048 bits or more)".to_string())?;
     let mut header = json!({ "alg": "RS256", "typ": "JWT" });
     if let Some(k) = kid {
         header["kid"] = json!(k);
     }
-    let input = format!("{}.{}", b64url(header.to_string().as_bytes()), b64url(claims.to_string().as_bytes()));
+    let input = format!(
+        "{}.{}",
+        b64url(header.to_string().as_bytes()),
+        b64url(claims.to_string().as_bytes())
+    );
     let mut sig = vec![0u8; key.public_modulus_len()];
-    key.sign(&signature::RSA_PKCS1_SHA256, &SystemRandom::new(), input.as_bytes(), &mut sig).map_err(|_| "signing failed")?;
+    key.sign(&signature::RSA_PKCS1_SHA256, &SystemRandom::new(), input.as_bytes(), &mut sig)
+        .map_err(|_| "signing failed")?;
     Ok(Zeroizing::new(format!("{input}.{}", b64url(&sig))))
 }
 
@@ -354,7 +399,11 @@ async fn mint_github(app: &AppRef, meta: &SecretMeta, m: &Material) -> Result<Mi
     if !installation.chars().all(|c| c.is_ascii_digit()) {
         return Err("installation_id must be a number".into());
     }
-    let iss = meta.fields.get("client_id").and_then(Value::as_str).map_or_else(|| field(meta, "app_id"), Ok)?;
+    let iss = meta
+        .fields
+        .get("client_id")
+        .and_then(Value::as_str)
+        .map_or_else(|| field(meta, "app_id"), Ok)?;
     let now = now_ms() / 1000;
     let jwt = sign_rs256(&m.value, &json!({ "iat": now - 60, "exp": now + 540, "iss": iss }), None)?;
     let rb = app
@@ -381,7 +430,11 @@ async fn tailscale_token(app: &AppRef, meta: &SecretMeta, m: &Material) -> Resul
         .http
         .post(format!("{}/oauth/token", app.endpoints.tailscale))
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(form(&[("client_id", client_id), ("client_secret", &m.value), ("grant_type", "client_credentials")]));
+        .body(form(&[
+            ("client_id", client_id),
+            ("client_secret", &m.value),
+            ("grant_type", "client_credentials"),
+        ]));
     let v = send_json(rb, "Tailscale OAuth", &[&m.value]).await?;
     let token = Zeroizing::new(str_at(&v, "/access_token", "Tailscale OAuth")?.to_string());
     let ttl = Duration::from_secs(v.get("expires_in").and_then(Value::as_u64).unwrap_or(3600));
@@ -392,7 +445,10 @@ async fn tailscale_token(app: &AppRef, meta: &SecretMeta, m: &Material) -> Resul
 /// which is saved as a new version before the access token is used.
 async fn mint_slack(app: &AppRef, meta: &SecretMeta, m: &Material) -> Result<Minted, String> {
     let client_id = field(meta, "client_id")?;
-    let client_secret = m.get("client_secret").filter(|s| !s.is_empty()).ok_or("add the client_secret part to this secret first")?;
+    let client_secret = m
+        .get("client_secret")
+        .filter(|s| !s.is_empty())
+        .ok_or("add the client_secret part to this secret first")?;
     let basic = base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{client_secret}"));
     let rb = app
         .http
@@ -415,7 +471,12 @@ async fn mint_slack(app: &AppRef, meta: &SecretMeta, m: &Material) -> Result<Min
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("saving Slack's new refresh token for {} (attempt {}): {}", meta.name, attempt + 1, e.msg);
+                    tracing::error!(
+                        "saving Slack's new refresh token for {} (attempt {}): {}",
+                        meta.name,
+                        attempt + 1,
+                        e.msg
+                    );
                     saved = Err(e.msg);
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
@@ -494,7 +555,10 @@ async fn revoke(rotator: &str, c: &Ctx<'_>, old_ref: &str) -> Result<(), String>
         }
         "tailscale-authkey" => {
             let token = tailscale_parent_token(c).await?;
-            let rb = app.http.delete(format!("{}/tailnet/-/keys/{id}", c.ep().tailscale)).bearer_auth(token.as_str());
+            let rb = app
+                .http
+                .delete(format!("{}/tailnet/-/keys/{id}", c.ep().tailscale))
+                .bearer_auth(token.as_str());
             send_json(rb, "Tailscale delete key", &[token.as_str()]).await.map(|_| ())
         }
         "azure-app-secret" => {
@@ -512,7 +576,10 @@ async fn revoke(rotator: &str, c: &Ctx<'_>, old_ref: &str) -> Result<(), String>
                 return Err("unexpected Google key name".into());
             }
             let token = google_token(c).await?;
-            let rb = app.http.delete(format!("{}/{old_ref}", c.ep().google_apikeys)).bearer_auth(token.as_str());
+            let rb = app
+                .http
+                .delete(format!("{}/{old_ref}", c.ep().google_apikeys))
+                .bearer_auth(token.as_str());
             send_json(rb, "Google delete key", &[token.as_str()]).await.map(|_| ())
         }
         "anthropic" => {
@@ -535,7 +602,12 @@ async fn openrouter_find(c: &Ctx<'_>) -> Result<Option<String>, String> {
     let (_, pm) = c.parent()?;
     let app = c.app;
     // The key's own masked label, then the management list to find its hash.
-    let me = send_json(app.http.get(format!("{}/key", c.ep().openrouter)).bearer_auth(&c.old.value), "OpenRouter key info", &[&c.old.value]).await?;
+    let me = send_json(
+        app.http.get(format!("{}/key", c.ep().openrouter)).bearer_auth(&c.old.value),
+        "OpenRouter key info",
+        &[&c.old.value],
+    )
+    .await?;
     let label = me.pointer("/data/label").and_then(Value::as_str).unwrap_or("").to_string();
     if label.is_empty() {
         return Ok(None);
@@ -545,7 +617,11 @@ async fn openrouter_find(c: &Ctx<'_>) -> Result<Option<String>, String> {
         let url = format!("{}/keys?include_disabled=true&offset={}", c.ep().openrouter, page * 100);
         let v = send_json(app.http.get(url).bearer_auth(&pm.value), "OpenRouter list keys", &[&pm.value]).await?;
         let rows = v.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
-        hits.extend(rows.iter().filter(|r| r.get("label").and_then(Value::as_str) == Some(label.as_str())).filter_map(|r| r.get("hash").and_then(Value::as_str).map(String::from)));
+        hits.extend(
+            rows.iter()
+                .filter(|r| r.get("label").and_then(Value::as_str) == Some(label.as_str()))
+                .filter_map(|r| r.get("hash").and_then(Value::as_str).map(String::from)),
+        );
         if rows.len() < 100 {
             break;
         }
@@ -566,13 +642,28 @@ async fn openrouter_create(c: &Ctx<'_>) -> Result<Created, String> {
     let mut limit = Value::Null;
     let mut reset = Value::Null;
     if let Some(h) = &old_ref {
-        let v = send_json(app.http.get(format!("{}/keys/{}", c.ep().openrouter, safe_seg(h)?)).bearer_auth(&pm.value), "OpenRouter key", &[&pm.value]).await?;
+        let v = send_json(
+            app.http
+                .get(format!("{}/keys/{}", c.ep().openrouter, safe_seg(h)?))
+                .bearer_auth(&pm.value),
+            "OpenRouter key",
+            &[&pm.value],
+        )
+        .await?;
         limit = v.pointer("/data/limit").cloned().unwrap_or(Value::Null);
         reset = v.pointer("/data/limit_reset").cloned().unwrap_or(Value::Null);
     }
     let name = format!("{} (rotated {})", c.meta.name, timeutil::format_date(now_ms()));
     let body = json!({ "name": name, "limit": limit, "limit_reset": reset });
-    let v = send_json(app.http.post(format!("{}/keys", c.ep().openrouter)).bearer_auth(&pm.value).json(&body), "OpenRouter create key", &[&pm.value]).await?;
+    let v = send_json(
+        app.http
+            .post(format!("{}/keys", c.ep().openrouter))
+            .bearer_auth(&pm.value)
+            .json(&body),
+        "OpenRouter create key",
+        &[&pm.value],
+    )
+    .await?;
     let key = str_at(&v, "/key", "OpenRouter create key")?;
     Ok(Created {
         material: Material::single(key),
@@ -587,7 +678,14 @@ async fn openrouter_create(c: &Ctx<'_>) -> Result<Created, String> {
 
 async fn cloudflare_roll(c: &Ctx<'_>) -> Result<Created, String> {
     let app = c.app;
-    let v = send_json(app.http.get(format!("{}/user/tokens/verify", c.ep().cloudflare)).bearer_auth(&c.old.value), "Cloudflare verify", &[&c.old.value]).await?;
+    let v = send_json(
+        app.http
+            .get(format!("{}/user/tokens/verify", c.ep().cloudflare))
+            .bearer_auth(&c.old.value),
+        "Cloudflare verify",
+        &[&c.old.value],
+    )
+    .await?;
     let token_id = safe_seg(str_at(&v, "/result/id", "Cloudflare verify")?)?.to_string();
     // A manager token with "API Tokens: Edit", or the token itself.
     let manager = c.parent.as_ref().map(|(_, m)| m.value.as_str()).unwrap_or(&c.old.value);
@@ -595,23 +693,41 @@ async fn cloudflare_roll(c: &Ctx<'_>) -> Result<Created, String> {
         Some(acct) => format!("{}/accounts/{}/tokens/{token_id}/value", c.ep().cloudflare, safe_seg(acct)?),
         None => format!("{}/user/tokens/{token_id}/value", c.ep().cloudflare),
     };
-    let v = send_json(app.http.put(url).bearer_auth(manager).json(&json!({})), "Cloudflare roll token", &[manager, &c.old.value])
-        .await
-        .map_err(|e| {
-            if e.contains("HTTP 403") || e.contains("HTTP 401") {
-                format!("{e}. Set a manager token that has the \"API Tokens: Edit\" permission.")
-            } else {
-                e
-            }
-        })?;
-    let value = v.get("result").and_then(Value::as_str).filter(|s| s.len() >= 20).ok_or("Cloudflare roll: no new value in the reply")?;
-    Ok(Created { material: Material::single(value), provider_ref: Some(token_id), old_ref: None, old_gone: true, fields: None })
+    let v = send_json(
+        app.http.put(url).bearer_auth(manager).json(&json!({})),
+        "Cloudflare roll token",
+        &[manager, &c.old.value],
+    )
+    .await
+    .map_err(|e| {
+        if e.contains("HTTP 403") || e.contains("HTTP 401") {
+            format!("{e}. Set a manager token that has the \"API Tokens: Edit\" permission.")
+        } else {
+            e
+        }
+    })?;
+    let value = v
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|s| s.len() >= 20)
+        .ok_or("Cloudflare roll: no new value in the reply")?;
+    Ok(Created {
+        material: Material::single(value),
+        provider_ref: Some(token_id),
+        old_ref: None,
+        old_gone: true,
+        fields: None,
+    })
 }
 
 // Tailscale: an OAuth client creates a new auth key with the old one's settings.
 
 fn tailscale_key_id(key: &str) -> Option<String> {
-    key.strip_prefix("tskey-auth-")?.split('-').next().filter(|s| !s.is_empty()).map(String::from)
+    key.strip_prefix("tskey-auth-")?
+        .split('-')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 async fn tailscale_parent_token(c: &Ctx<'_>) -> Result<Zeroizing<String>, String> {
@@ -631,7 +747,10 @@ async fn tailscale_create(c: &Ctx<'_>) -> Result<Created, String> {
     if v.get("keyType").and_then(Value::as_str).is_some_and(|t| t != "auth") {
         return Err("Tailscale says this isn't an auth key, so nothing was created".into());
     }
-    let mut caps = v.pointer("/capabilities/devices/create").cloned().ok_or("Tailscale didn't return the old key's settings")?;
+    let mut caps = v
+        .pointer("/capabilities/devices/create")
+        .cloned()
+        .ok_or("Tailscale didn't return the old key's settings")?;
     let old_id = Some(old_id);
     if let Some(tags) = c.meta.fields.get("tags").and_then(Value::as_str) {
         let t: Vec<&str> = tags.split([',', ' ']).filter(|t| !t.is_empty()).collect();
@@ -645,7 +764,15 @@ async fn tailscale_create(c: &Ctx<'_>) -> Result<Created, String> {
         "expirySeconds": 90 * 86_400,
         "description": "rotated by keys vault",
     });
-    let v = send_json(app.http.post(format!("{}/tailnet/-/keys", c.ep().tailscale)).bearer_auth(token.as_str()).json(&body), "Tailscale create key", &[token.as_str()]).await?;
+    let v = send_json(
+        app.http
+            .post(format!("{}/tailnet/-/keys", c.ep().tailscale))
+            .bearer_auth(token.as_str())
+            .json(&body),
+        "Tailscale create key",
+        &[token.as_str()],
+    )
+    .await?;
     let key = str_at(&v, "/key", "Tailscale create key")?;
     Ok(Created {
         material: Material::single(key),
@@ -680,7 +807,12 @@ async fn azure_find(c: &Ctx<'_>) -> Result<Option<String>, String> {
     let token = azure_token(c, &c.old.value).await?;
     let app_id = safe_seg(field(c.meta, "client_id")?)?;
     let url = format!("{}/applications(appId='{app_id}')?$select=id,passwordCredentials", c.ep().graph);
-    let v = send_json(c.app.http.get(url).bearer_auth(token.as_str()), "Microsoft Graph application", &[token.as_str()]).await?;
+    let v = send_json(
+        c.app.http.get(url).bearer_auth(token.as_str()),
+        "Microsoft Graph application",
+        &[token.as_str()],
+    )
+    .await?;
     let hint: String = c.old.value.chars().take(3).collect();
     let hits: Vec<String> = v
         .get("passwordCredentials")
@@ -702,7 +834,12 @@ async fn azure_create(c: &Ctx<'_>) -> Result<Created, String> {
         "displayName": format!("keys vault {}", timeutil::format_date(now_ms())),
         "endDateTime": timeutil::format_rfc3339(now_ms() + days * DAY_MS),
     }});
-    let rb = c.app.http.post(format!("{}/applications(appId='{app_id}')/addPassword", c.ep().graph)).bearer_auth(token.as_str()).json(&body);
+    let rb = c
+        .app
+        .http
+        .post(format!("{}/applications(appId='{app_id}')/addPassword", c.ep().graph))
+        .bearer_auth(token.as_str())
+        .json(&body);
     let v = send_json(rb, "Microsoft Graph addPassword", &[token.as_str()]).await.map_err(|e| {
         if e.contains("HTTP 403") {
             format!("{e}. The app needs the Application.ReadWrite.OwnedBy permission and must be an owner of itself.")
@@ -724,14 +861,28 @@ async fn azure_create(c: &Ctx<'_>) -> Result<Created, String> {
 
 fn valid_google_key_name(n: &str) -> bool {
     let p: Vec<&str> = n.split('/').collect();
-    p.len() == 6 && p[0] == "projects" && p[2] == "locations" && p[3] == "global" && p[4] == "keys" && safe_seg(p[1]).is_ok() && safe_seg(p[5]).is_ok()
+    p.len() == 6
+        && p[0] == "projects"
+        && p[2] == "locations"
+        && p[3] == "global"
+        && p[4] == "keys"
+        && safe_seg(p[1]).is_ok()
+        && safe_seg(p[5]).is_ok()
 }
 
 async fn google_token(c: &Ctx<'_>) -> Result<Zeroizing<String>, String> {
     let (_, pm) = c.parent()?;
     let sa: Value = serde_json::from_str(&pm.value).map_err(|_| "the manager isn't a service account JSON key")?;
-    let email = sa.get("client_email").and_then(Value::as_str).ok_or("service account JSON has no client_email")?;
-    let pem = Zeroizing::new(sa.get("private_key").and_then(Value::as_str).ok_or("service account JSON has no private_key")?.to_string());
+    let email = sa
+        .get("client_email")
+        .and_then(Value::as_str)
+        .ok_or("service account JSON has no client_email")?;
+    let pem = Zeroizing::new(
+        sa.get("private_key")
+            .and_then(Value::as_str)
+            .ok_or("service account JSON has no private_key")?
+            .to_string(),
+    );
     let now = now_ms() / 1000;
     // Always Google's token endpoint, never one named inside the JSON.
     let claims = json!({
@@ -744,7 +895,10 @@ async fn google_token(c: &Ctx<'_>) -> Result<Zeroizing<String>, String> {
         .http
         .post(&c.ep().google_token)
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(form(&[("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", jwt.as_str())]));
+        .body(form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+            ("assertion", jwt.as_str()),
+        ]));
     let v = send_json(rb, "Google sign-in", &[jwt.as_str()]).await?;
     Ok(Zeroizing::new(str_at(&v, "/access_token", "Google sign-in")?.to_string()))
 }
@@ -754,7 +908,12 @@ async fn google_find(c: &Ctx<'_>) -> Result<(String, String), String> {
     let token = google_token(c).await?;
     let mut url = url::Url::parse(&format!("{}/keys:lookupKey", c.ep().google_apikeys)).map_err(|e| e.to_string())?;
     url.query_pairs_mut().append_pair("keyString", &c.old.value);
-    let v = send_json(c.app.http.get(url).bearer_auth(token.as_str()), "Google lookupKey", &[token.as_str(), &c.old.value]).await?;
+    let v = send_json(
+        c.app.http.get(url).bearer_auth(token.as_str()),
+        "Google lookupKey",
+        &[token.as_str(), &c.old.value],
+    )
+    .await?;
     let name = str_at(&v, "/name", "Google lookupKey")?.to_string();
     let parent = str_at(&v, "/parent", "Google lookupKey")?.to_string();
     if !valid_google_key_name(&name) || !parent.starts_with("projects/") || safe_seg(&parent["projects/".len()..]).is_err() {
@@ -768,12 +927,25 @@ async fn google_create(c: &Ctx<'_>) -> Result<Created, String> {
     let (old_name, parent) = google_find(c).await?;
     let token = google_token(c).await?;
     let base = &c.ep().google_apikeys;
-    let old = send_json(app.http.get(format!("{base}/{old_name}")).bearer_auth(token.as_str()), "Google get key", &[token.as_str()]).await?;
+    let old = send_json(
+        app.http.get(format!("{base}/{old_name}")).bearer_auth(token.as_str()),
+        "Google get key",
+        &[token.as_str()],
+    )
+    .await?;
     let mut body = json!({ "displayName": format!("{} (rotated {})", old.get("displayName").and_then(Value::as_str).unwrap_or(&c.meta.name), timeutil::format_date(now_ms())) });
     if let Some(r) = old.get("restrictions") {
         body["restrictions"] = r.clone();
     }
-    let op = send_json(app.http.post(format!("{base}/{parent}/locations/global/keys")).bearer_auth(token.as_str()).json(&body), "Google create key", &[token.as_str()]).await?;
+    let op = send_json(
+        app.http
+            .post(format!("{base}/{parent}/locations/global/keys"))
+            .bearer_auth(token.as_str())
+            .json(&body),
+        "Google create key",
+        &[token.as_str()],
+    )
+    .await?;
     let mut op = op;
     for _ in 0..30 {
         if op.get("done") == Some(&Value::Bool(true)) {
@@ -784,7 +956,12 @@ async fn google_create(c: &Ctx<'_>) -> Result<Created, String> {
             return Err("unexpected Google operation name".into());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        op = send_json(app.http.get(format!("{base}/{name}")).bearer_auth(token.as_str()), "Google operation", &[token.as_str()]).await?;
+        op = send_json(
+            app.http.get(format!("{base}/{name}")).bearer_auth(token.as_str()),
+            "Google operation",
+            &[token.as_str()],
+        )
+        .await?;
     }
     if let Some(e) = op.get("error") {
         return Err(format!("Google create key: {}", error_text(&json!({ "error": e }))));
@@ -811,7 +988,12 @@ async fn anthropic_find(c: &Ctx<'_>) -> Result<Option<String>, String> {
         if let Some(a) = &after {
             url.push_str(&format!("&after_id={}", safe_seg(a)?));
         }
-        let rb = c.app.http.get(url).header("x-api-key", &pm.value).header("anthropic-version", "2023-06-01");
+        let rb = c
+            .app
+            .http
+            .get(url)
+            .header("x-api-key", &pm.value)
+            .header("anthropic-version", "2023-06-01");
         let v = send_json(rb, "Anthropic list keys", &[&pm.value]).await?;
         for k in v.get("data").and_then(Value::as_array).into_iter().flatten() {
             let hint = k.get("partial_key_hint").and_then(Value::as_str).unwrap_or("");
@@ -852,7 +1034,10 @@ fn parent_provider_for(rotator: &str) -> Option<&'static str> {
 /// have written, or one for another service, must never be used.
 fn load_parent(app: &AppRef, meta: &SecretMeta, rotator: &str) -> ApiResult<Option<(SecretMeta, Material)>> {
     let Some(name) = &meta.parent else { return Ok(None) };
-    let pm = app.db.secret_get(name)?.ok_or_else(|| ApiError::bad_request(format!("the manager '{name}' no longer exists")))?;
+    let pm = app
+        .db
+        .secret_get(name)?
+        .ok_or_else(|| ApiError::bad_request(format!("the manager '{name}' no longer exists")))?;
     let want = parent_provider_for(rotator);
     if !pm.owner_only || want.is_none() || pm.provider.as_deref() != want {
         return Err(ApiError::bad_request(format!(
@@ -879,7 +1064,12 @@ async fn check_new(app: &AppRef, p: &Provider, meta: &SecretMeta, m: &Material, 
     for d in delays {
         tokio::time::sleep(Duration::from_secs(*d)).await;
         if p.id == "azure-app-secret" {
-            let c = Ctx { app, meta, old: m, parent: None };
+            let c = Ctx {
+                app,
+                meta,
+                old: m,
+                parent: None,
+            };
             match azure_token(&c, &m.value).await {
                 Ok(_) => return Ok(()),
                 Err(e) => last = e,
@@ -887,15 +1077,31 @@ async fn check_new(app: &AppRef, p: &Provider, meta: &SecretMeta, m: &Material, 
             continue;
         }
         let Some(v) = &p.verify else { return Ok(()) };
-        let Some(url) = describe::verify_url(p, v, meta) else { return Ok(()) };
+        let Some(url) = describe::verify_url(p, v, meta) else {
+            return Ok(());
+        };
         let url = app.endpoints.rewrite(url);
-        let out = describe::verify_with_provider(&app.http, v, url, &Creds { material: m, fields: &meta.fields }).await;
+        let out = describe::verify_with_provider(
+            &app.http,
+            v,
+            url,
+            &Creds {
+                material: m,
+                fields: &meta.fields,
+            },
+        )
+        .await;
         if out.valid() {
             return Ok(());
         }
         last = match out.result.get("status").and_then(Value::as_str) {
             Some("rejected") => "the provider rejected the new key".into(),
-            Some("incomplete") => out.result.get("error").and_then(Value::as_str).unwrap_or("missing parts").to_string(),
+            Some("incomplete") => out
+                .result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("missing parts")
+                .to_string(),
             _ => format!("the provider didn't confirm the new key (HTTP {})", out.status),
         };
     }
@@ -924,7 +1130,13 @@ fn swap_in(
     if let Some(f) = fields {
         let mut merged = meta.fields.as_object().cloned().unwrap_or_default();
         merged.extend(f);
-        app.db.secret_set_settings(meta.id, &crate::db::Settings { fields: Some(Value::Object(merged)), ..Default::default() })?;
+        app.db.secret_set_settings(
+            meta.id,
+            &crate::db::Settings {
+                fields: Some(Value::Object(merged)),
+                ..Default::default()
+            },
+        )?;
     }
     let version = app.save_version(meta.id, new, provider_ref)?;
     app.db.secret_mark_rotated(meta.id)?;
@@ -932,24 +1144,42 @@ fn swap_in(
     let grace = i64::from(app.cfg.rotation.grace_hours) * HOUR_MS;
     if old_gone {
         let _ = app.db.version_delete(meta.id, meta.version);
-        app.db.rotation_update(rot, "done", Some(version), None, None, Some("the provider replaced the old value, so it stopped working at once"), true)?;
+        app.db.rotation_update(
+            rot,
+            "done",
+            Some(version),
+            None,
+            None,
+            Some("the provider replaced the old value, so it stopped working at once"),
+            true,
+        )?;
     } else if revocable && old_ref.is_some() {
         let msg = format!("the old key is revoked automatically after {} hours", app.cfg.rotation.grace_hours);
-        app.db.rotation_update(rot, "grace", Some(version), old_ref.as_deref(), Some(now_ms() + grace), Some(&msg), false)?;
+        app.db.rotation_update(
+            rot,
+            "grace",
+            Some(version),
+            old_ref.as_deref(),
+            Some(now_ms() + grace),
+            Some(&msg),
+            false,
+        )?;
     } else {
         let msg = "delete the old key on the provider's site, then mark this done";
-        app.db.rotation_update(rot, "manual_revoke", Some(version), None, None, Some(msg), false)?;
+        app.db
+            .rotation_update(rot, "manual_revoke", Some(version), None, None, Some(msg), false)?;
     }
     tokio::spawn(describe::run(app.clone(), meta.id, version, true));
     row(app, rot)
 }
 
-
 /// Rotates through the provider's API.
 pub async fn rotate_auto(app: &AppRef, meta: &SecretMeta, actor: &str) -> ApiResult<RotationRow> {
     let p = provider_of(meta).ok_or_else(|| ApiError::bad_request("the vault doesn't know this key's provider"))?;
     let Rotation::Auto(rotator) = p.rotation else {
-        return Err(ApiError::bad_request("this key can't be rotated automatically: paste a new value instead"));
+        return Err(ApiError::bad_request(
+            "this key can't be rotated automatically: paste a new value instead",
+        ));
     };
     if !auto_ready(Some(p), meta) {
         let missing = missing_details(Some(p), meta);
@@ -963,7 +1193,10 @@ pub async fn rotate_auto(app: &AppRef, meta: &SecretMeta, actor: &str) -> ApiRes
     let _guard = lock.lock().await;
     let meta = app.db.secret_by_id(meta.id)?.ok_or_else(ApiError::not_found)?;
     if app.db.rotation_active(meta.id)?.is_some() {
-        return Err(ApiError::new(StatusCode::CONFLICT, "finish or undo this key's previous rotation first"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "finish or undo this key's previous rotation first",
+        ));
     }
     let start = Instant::now();
     let rot = app.db.rotation_insert(meta.id, "auto", actor, Some(meta.version))?;
@@ -977,7 +1210,10 @@ pub async fn rotate_auto(app: &AppRef, meta: &SecretMeta, actor: &str) -> ApiRes
             app.record_internal(ev.detail(format!("{rotator}: failed")), 502, start.elapsed());
             // Still "running" means nothing was switched: the old key is in use.
             if app.db.rotation_transition(rot, "running", "failed", &e.msg, true)? {
-                return Err(ApiError::new(e.status, format!("rotation failed: {}. The old key is still in use.", e.msg)));
+                return Err(ApiError::new(
+                    e.status,
+                    format!("rotation failed: {}. The old key is still in use.", e.msg),
+                ));
             }
             Err(e)
         }
@@ -991,7 +1227,12 @@ async fn rotate_inner(app: &AppRef, p: &Provider, rotator: &str, meta: &SecretMe
     if parent.is_none() && p.parent_provider.is_some_and(|pp| pp != p.id) {
         return Err(ApiError::bad_request("set a manager first"));
     }
-    let ctx = Ctx { app, meta, old: &old, parent };
+    let ctx = Ctx {
+        app,
+        meta,
+        old: &old,
+        parent,
+    };
     let created = create_new(rotator, &ctx).await.map_err(gw)?;
     let mut check_meta = meta.clone();
     if let Some(f) = &created.fields
@@ -1002,7 +1243,18 @@ async fn rotate_inner(app: &AppRef, p: &Provider, rotator: &str, meta: &SecretMe
     if created.old_gone {
         // The provider already replaced the value: keep the new one whatever
         // happens next, since the old one no longer works.
-        let r = swap_in(app, meta, rot, &created.material, created.provider_ref.as_deref(), created.fields.clone(), None, false, true, Some(rotator))?;
+        let r = swap_in(
+            app,
+            meta,
+            rot,
+            &created.material,
+            created.provider_ref.as_deref(),
+            created.fields.clone(),
+            None,
+            false,
+            true,
+            Some(rotator),
+        )?;
         if let Err(e) = check_new(app, p, &check_meta, &created.material, true).await {
             let msg = format!("the provider replaced the key and the new value is saved, but it didn't pass the check yet: {e}");
             app.db.rotation_transition(rot, "done", "failed", &msg, true)?;
@@ -1013,12 +1265,28 @@ async fn rotate_inner(app: &AppRef, p: &Provider, rotator: &str, meta: &SecretMe
     if let Err(e) = check_new(app, p, &check_meta, &created.material, true).await {
         // Don't leave an unused key behind.
         if let Some(r) = &created.provider_ref {
-            let new_ctx = Ctx { app, meta, old: &created.material, parent: load_parent(app, meta, rotator)? };
+            let new_ctx = Ctx {
+                app,
+                meta,
+                old: &created.material,
+                parent: load_parent(app, meta, rotator)?,
+            };
             let _ = revoke(rotator, &new_ctx, r).await;
         }
         return Err(gw(format!("the new key didn't work: {e}")));
     }
-    swap_in(app, meta, rot, &created.material, created.provider_ref.as_deref(), created.fields, created.old_ref, true, false, Some(rotator))
+    swap_in(
+        app,
+        meta,
+        rot,
+        &created.material,
+        created.provider_ref.as_deref(),
+        created.fields,
+        created.old_ref,
+        true,
+        false,
+        Some(rotator),
+    )
 }
 /// Finishes a rotation the owner did by hand: checks the pasted value,
 /// switches over, and arranges for the old key to be revoked.
@@ -1034,7 +1302,10 @@ pub async fn complete_guided(
     let _guard = lock.lock().await;
     let meta = app.db.secret_by_id(meta.id)?.ok_or_else(ApiError::not_found)?;
     if app.db.rotation_active(meta.id)?.is_some() {
-        return Err(ApiError::new(StatusCode::CONFLICT, "finish or undo this key's previous rotation first (Rotation page)"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "finish or undo this key's previous rotation first (Rotation page)",
+        ));
     }
     let old = app.reveal(&meta)?;
     if old.value == new.value {
@@ -1058,7 +1329,10 @@ pub async fn complete_guided(
         && let Some(p) = p
         && let Err(e) = check_new(app, p, &check_meta, &new, false).await
     {
-        return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("{e}. Nothing was changed.")));
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{e}. Nothing was changed."),
+        ));
     }
     let rot = app.db.rotation_insert(meta.id, "guided", actor, Some(meta.version))?;
     // Find the old key's provider ID while we still have the old value.
@@ -1066,18 +1340,36 @@ pub async fn complete_guided(
     let rev = p.and_then(revoker);
     if let Some(r) = rev {
         let parent = load_parent(app, &meta, r).ok().flatten();
-        let ctx = Ctx { app, meta: &check_meta, old: &old, parent };
+        let ctx = Ctx {
+            app,
+            meta: &check_meta,
+            old: &old,
+            parent,
+        };
         if ctx.parent.is_some() || r == "azure-app-secret" {
             old_ref = find_old_ref(r, &ctx).await.ok().flatten();
         }
     }
     let old_gone = p.is_some_and(|p| matches!(p.rotation, Rotation::Auto("cloudflare")));
-    swap_in(app, &meta, rot, &new, None, fields, old_ref.clone(), rev.is_some() && old_ref.is_some(), old_gone, rev)
+    swap_in(
+        app,
+        &meta,
+        rot,
+        &new,
+        None,
+        fields,
+        old_ref.clone(),
+        rev.is_some() && old_ref.is_some(),
+        old_gone,
+        rev,
+    )
 }
 
 /// Revokes the old key of a rotation whose grace period is over.
 pub async fn finish(app: &AppRef, due: &RotationRow) {
-    let Ok(Some(meta)) = app.db.secret_by_id(due.secret_id) else { return };
+    let Ok(Some(meta)) = app.db.secret_by_id(due.secret_id) else {
+        return;
+    };
     let lock = app.minted.lock_for(meta.id);
     let _guard = lock.lock().await;
     // Re-read under the lock: an undo may have just happened.
@@ -1093,19 +1385,34 @@ pub async fn finish(app: &AppRef, due: &RotationRow) {
         return manual("delete the old key on the provider's site, then mark this done");
     };
     if Some(meta.version) != r.new_version {
-        return manual("the key changed after this rotation, so the vault won't revoke anything; delete the old key by hand if it still exists");
+        return manual(
+            "the key changed after this rotation, so the vault won't revoke anything; delete the old key by hand if it still exists",
+        );
     }
     let start = Instant::now();
     let ev = EventInfo::new("revoke", ACTOR_SCHEDULER).secret(&meta.name);
     let Ok(current) = app.reveal(&meta) else { return }; // sealed; try again later
     let parent = match load_parent(app, &meta, rotator) {
         Ok(p) => p,
-        Err(e) => return manual(&format!("couldn't revoke the old key: {}; delete it on the provider's site, then mark this done", e.msg)),
+        Err(e) => {
+            return manual(&format!(
+                "couldn't revoke the old key: {}; delete it on the provider's site, then mark this done",
+                e.msg
+            ));
+        }
     };
-    let ctx = Ctx { app, meta: &meta, old: &current, parent };
+    let ctx = Ctx {
+        app,
+        meta: &meta,
+        old: &current,
+        parent,
+    };
     match revoke(rotator, &ctx, old_ref).await {
         Ok(()) => {
-            if app.db.rotation_transition(r.id, "grace", "done", "the old key was revoked", true).unwrap_or(false)
+            if app
+                .db
+                .rotation_transition(r.id, "grace", "done", "the old key was revoked", true)
+                .unwrap_or(false)
                 && let Some(v) = r.old_version
             {
                 let _ = app.db.version_delete(meta.id, v);
@@ -1114,7 +1421,9 @@ pub async fn finish(app: &AppRef, due: &RotationRow) {
         }
         Err(e) => {
             if now_ms() - r.revoke_after.unwrap_or(0) > DAY_MS {
-                manual(&format!("couldn't revoke the old key ({e}); delete it on the provider's site, then mark this done"));
+                manual(&format!(
+                    "couldn't revoke the old key ({e}); delete it on the provider's site, then mark this done"
+                ));
             } else {
                 let _ = app.db.rotation_retry(r.id, now_ms() + HOUR_MS, &format!("retrying: {e}"));
             }
@@ -1137,7 +1446,10 @@ pub async fn rollback(app: &AppRef, id: i64) -> ApiResult<RotationRow> {
     };
     let meta = app.db.secret_by_id(r.secret_id)?.ok_or_else(ApiError::not_found)?;
     if meta.version != new_v {
-        return Err(ApiError::new(StatusCode::CONFLICT, "the key has changed since this rotation, so it can't be undone"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "the key has changed since this rotation, so it can't be undone",
+        ));
     }
     let old = app.reveal_version(&meta, old_v)?;
     if !app.db.rotation_transition(id, &r.state, "rolled_back", "rolling back", true)? {
@@ -1157,13 +1469,21 @@ pub async fn rollback(app: &AppRef, id: i64) -> ApiResult<RotationRow> {
     {
         match load_parent(app, &meta, rot) {
             Ok(parent) => {
-                let ctx = Ctx { app, meta: &meta, old: &old, parent };
+                let ctx = Ctx {
+                    app,
+                    meta: &meta,
+                    old: &old,
+                    parent,
+                };
                 match revoke(rot, &ctx, &nr).await {
                     Ok(()) => msg.push_str("; the new key was revoked"),
                     Err(e) => msg.push_str(&format!("; couldn't revoke the new key ({e}), delete it on the provider's site")),
                 }
             }
-            Err(e) => msg.push_str(&format!("; couldn't revoke the new key ({}), delete it on the provider's site", e.msg)),
+            Err(e) => msg.push_str(&format!(
+                "; couldn't revoke the new key ({}), delete it on the provider's site",
+                e.msg
+            )),
         }
     }
     let _ = app.db.version_delete(meta.id, new_v);
@@ -1178,7 +1498,9 @@ pub fn mark_done(app: &AppRef, id: i64) -> ApiResult<RotationRow> {
     if !matches!(r.state.as_str(), "manual_revoke" | "grace") {
         return Err(ApiError::bad_request("this rotation isn't waiting for the old key to be deleted"));
     }
-    if app.db.rotation_transition(id, &r.state, "done", "the old key was deleted by hand", true)?
+    if app
+        .db
+        .rotation_transition(id, &r.state, "done", "the old key was deleted by hand", true)?
         && let Some(v) = r.old_version
     {
         let _ = app.db.version_delete(r.secret_id, v);
@@ -1198,7 +1520,13 @@ pub async fn tick(app: &AppRef) {
     if !app.cfg.rotation.scheduled {
         return;
     }
-    let latest: HashMap<i64, RotationRow> = app.db.rotations_latest().unwrap_or_default().into_iter().map(|r| (r.secret_id, r)).collect();
+    let latest: HashMap<i64, RotationRow> = app
+        .db
+        .rotations_latest()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.secret_id, r))
+        .collect();
     let all = app.db.secret_list().unwrap_or_default();
     for meta in all.iter().cloned() {
         let p = provider_of(&meta);
@@ -1233,7 +1561,10 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
     let latest: HashMap<i64, RotationRow> = app.db.rotations_latest()?.into_iter().map(|r| (r.secret_id, r)).collect();
     let mut out = vec![];
     let mut add = |m: &SecretMeta, kind: &str, fp: String, level: &str, reason: String, action: &str| {
-        out.push((m.id, json!({ "secret": m.name, "kind": kind, "fp": fp, "level": level, "reason": reason, "action": action })));
+        out.push((
+            m.id,
+            json!({ "secret": m.name, "kind": kind, "fp": fp, "level": level, "reason": reason, "action": action }),
+        ));
     };
     for m in &all {
         let p = provider_of(m);
@@ -1242,12 +1573,26 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
             if e <= now {
                 add(m, "expired", e.to_string(), "critical", "expired".into(), "rotate");
             } else if e - now < 30 * DAY_MS {
-                add(m, "expiring", e.to_string(), "warning", format!("expires in {} days", (e - now) / DAY_MS + 1), "rotate");
+                add(
+                    m,
+                    "expiring",
+                    e.to_string(),
+                    "warning",
+                    format!("expires in {} days", (e - now) / DAY_MS + 1),
+                    "rotate",
+                );
             }
         }
         let status = m.facts.pointer("/verification/status").and_then(Value::as_str);
         if status == Some("rejected") {
-            add(m, "rejected", ver.clone(), "critical", "the provider rejected it the last time it was checked".into(), "rotate");
+            add(
+                m,
+                "rejected",
+                ver.clone(),
+                "critical",
+                "the provider rejected it the last time it was checked".into(),
+                "rotate",
+            );
         }
         if let Some(x) = &m.exposed {
             add(m, "exposed", ver.clone(), "critical", x.clone(), "rotate");
@@ -1262,9 +1607,14 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
                     format!("the last rotation failed: {}", r.message.as_deref().unwrap_or("")),
                     "rotate",
                 ),
-                "manual_revoke" => {
-                    add(m, "delete_old", r.id.to_string(), "warning", "rotated; delete the old key on the provider's site".into(), "done")
-                }
+                "manual_revoke" => add(
+                    m,
+                    "delete_old",
+                    r.id.to_string(),
+                    "warning",
+                    "rotated; delete the old key on the provider's site".into(),
+                    "done",
+                ),
                 _ => {}
             }
         }
@@ -1275,22 +1625,46 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
         }
         if let Some(miss) = m.facts.get("missing").and_then(Value::as_array).filter(|a| !a.is_empty()) {
             let labels: Vec<&str> = miss.iter().filter_map(Value::as_str).collect();
-            add(m, "missing", format!("{ver}:{}", labels.join(",")), "warning", format!("missing: {}", labels.join(", ")), "edit");
+            add(
+                m,
+                "missing",
+                format!("{ver}:{}", labels.join(",")),
+                "warning",
+                format!("missing: {}", labels.join(", ")),
+                "edit",
+            );
         }
         if let Some(mac) = &m.value_mac
             && let Some(o) = all.iter().find(|o| o.id < m.id && o.value_mac.as_ref() == Some(mac))
         {
-            add(m, "duplicate", format!("{ver}:{}", o.id), "info", format!("same value as {}", o.name), "delete");
+            add(
+                m,
+                "duplicate",
+                format!("{ver}:{}", o.id),
+                "info",
+                format!("same value as {}", o.name),
+                "delete",
+            );
         }
         if let Some(problem) = manager_problem(p, m, &all) {
-            add(m, "manager", problem.clone(), "warning", format!("can't rotate automatically: {problem}"), "edit");
+            add(
+                m,
+                "manager",
+                problem.clone(),
+                "warning",
+                format!("can't rotate automatically: {problem}"),
+                "edit",
+            );
         } else if matches!(p.map(|p| p.rotation), Some(Rotation::Auto(_))) && !auto_ready(p, m) && missing_details(p, m).is_empty() {
             add(
                 m,
                 "no_manager",
                 p.map(|p| p.id).unwrap_or("").to_string(),
                 "info",
-                format!("set a manager to rotate it automatically: {}", p.and_then(|p| p.parent_hint).unwrap_or("")),
+                format!(
+                    "set a manager to rotate it automatically: {}",
+                    p.and_then(|p| p.parent_hint).unwrap_or("")
+                ),
                 "edit",
             );
         }
@@ -1356,8 +1730,12 @@ mod tests {
         let header: Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
         assert_eq!(header, json!({ "alg": "RS256", "typ": "JWT", "kid": "kid1" }));
         let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
-        let pk = signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, aws_lc_rs::signature::KeyPair::public_key(&kp).as_ref());
-        pk.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig).expect("signature verifies");
+        let pk = signature::UnparsedPublicKey::new(
+            &signature::RSA_PKCS1_2048_8192_SHA256,
+            aws_lc_rs::signature::KeyPair::public_key(&kp).as_ref(),
+        );
+        pk.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig)
+            .expect("signature verifies");
         assert!(sign_rs256("not a key", &json!({}), None).is_err());
     }
 

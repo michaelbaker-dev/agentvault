@@ -599,8 +599,10 @@
     S.listEl = list;
     const unlockNote = autoUnlockNote();
     const attn = h("div", {});
-    loadSecrets().catch((e) => list.replaceChildren(errBox(e)));
-    loadAttention(attn);
+    // The attention panel needs the list loaded to offer Rotate and Edit.
+    loadSecrets()
+      .catch((e) => list.replaceChildren(errBox(e)))
+      .finally(() => loadAttention(attn));
     return h(
       "section",
       {},
@@ -1841,7 +1843,7 @@
     // ends up in shell history. Each one asks for it or reads $KEYS_TOKEN.
     const lines = [];
     if (r.scopes.includes("list") || r.scopes.includes("proxy")) {
-      lines.push(["Claude Code (MCP and the keys-vault skill): run this, then paste the token when it asks", "~/.claude/skills/keys-vault/scripts/keys setup"]);
+      lines.push(["Claude Code (MCP and the keys-vault skill): run this, then paste the token when it asks", "~/.claude/skills/keys-vault/scripts/keys-cli setup"]);
     }
     const env = ["In scripts and apps, read the token from the environment, e.g. after: read -rs KEYS_TOKEN; export KEYS_TOKEN", null];
     if (r.scopes.includes("read")) lines.push(["Fetch a value", `curl -s -H "Authorization: Bearer $KEYS_TOKEN" \\\n  ${origin}/v1/secrets/NAME/value`]);

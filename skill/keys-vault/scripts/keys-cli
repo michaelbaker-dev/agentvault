@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Use the keys vault from a shell, without the key values passing through you.
 
-  keys setup                          save the vault address and a token (asked for without
+  keys-cli setup                      save the vault address and a token (asked for without
                                       showing it), check them, and connect Claude Code's MCP
-  keys check                          is the vault reachable, unlocked, and the token working?
-  keys list [WORD]                    keys this token may use (no values)
-  keys describe NAME                  what one key is for, its risk, and how the proxy reaches it
-  keys call NAME PATH [options]       call the key's provider through the vault's proxy
+  keys-cli check                      is the vault reachable, unlocked, and the token working?
+  keys-cli list [WORD]                keys this token may use (no values)
+  keys-cli describe NAME              what one key is for, its risk, and how the proxy reaches it
+  keys-cli call NAME PATH [options]   call the key's provider through the vault's proxy
       -X METHOD   -q 'a=1&b=2'   -H 'Name: value'   -d '{"json": 1}' | -d @file
-  keys run NAME[=ENVVAR] ... -- COMMAND [ARGS]
+  keys-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]
                                       run COMMAND with keys in its environment; the values
                                       are blanked out of its output (needs the read scope)
 
@@ -32,7 +32,7 @@ MAX_SHOW = 100_000
 
 SETUP = f"""The keys vault isn't set up for this shell yet. The owner should, in their own terminal:
   1. Create a token in the vault's web interface (Tokens > preset "Claude / agents"; add the
-     read scope only if programs should get raw values through `keys run`).
+     read scope only if programs should get raw values through `keys-cli run`).
   2. mkdir -p {CONF} && echo https://VAULT-HOST > {CONF}/url
   3. (umask 077; cat > {CONF}/token)   then paste the token, press Enter and Ctrl-D.
 Never paste the token into a chat."""
@@ -133,7 +133,7 @@ def cmd_list(args):
 
 def cmd_describe(args):
     if len(args) != 1:
-        die("usage: keys describe NAME")
+        die("usage: keys-cli describe NAME")
     m = request("GET", f"/v1/secrets/{urllib.parse.quote(args[0], safe='')}")
     keep = ["name", "provider_name", "kind", "description", "risk", "risk_reason", "notes", "tags", "proxy_target",
             "docs_url", "fields", "parts", "expires_at", "exposed", "last_used_at", "use_count"]
@@ -158,7 +158,7 @@ def refused_by_vault(status, text):
 
 def cmd_call(args):
     if len(args) < 2:
-        die("usage: keys call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
+        die("usage: keys-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
     name, path, rest = args[0], args[1], args[2:]
     method, query, headers, body = "GET", "", {}, None
     i = 0
@@ -206,7 +206,7 @@ def cmd_call(args):
 
 def cmd_run(args):
     if "--" not in args or args.index("--") == 0 or args.index("--") == len(args) - 1:
-        die("usage: keys run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
+        die("usage: keys-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
     split = args.index("--")
     wanted, command = args[:split], args[split + 1:]
     env, secrets = dict(os.environ), []

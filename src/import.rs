@@ -38,8 +38,7 @@ pub struct Parsed {
 
 static ENV_LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{1,127})\s*=\s*(.*?)\s*$"#).expect("regex"));
-static INLINE_ENV: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\b([A-Z][A-Z0-9_]{1,127})=["']?([^\s"']{8,})["']?"#).expect("regex"));
+static INLINE_ENV: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\b([A-Z][A-Z0-9_]{1,127})=["']?([^\s"']{8,})["']?"#).expect("regex"));
 static UUID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$").expect("regex"));
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$").expect("regex"));
@@ -48,13 +47,11 @@ static USER_HOST: LazyLock<Regex> =
 /// "Bank password: hunter2 x" — everything after the separator is the
 /// value, spaces and all.
 static PASSWORD_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(.{0,60}?\b(password|passwd|pwd|passphrase|passcode|pin)\b[^:=]{0,20}?)\s*(?::|=|\s-\s)\s*(\S.*)$")
-        .expect("regex")
+    Regex::new(r"(?i)^(.{0,60}?\b(password|passwd|pwd|passphrase|passcode|pin)\b[^:=]{0,20}?)\s*(?::|=|\s-\s)\s*(\S.*)$").expect("regex")
 });
 /// "gmail password correcthorse": a password word followed by one token.
-static PASSWORD_TAIL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(.{0,60}?\b(password|passwd|pwd|passphrase|passcode)\b)\s+(\S{6,256})$").expect("regex")
-});
+static PASSWORD_TAIL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(.{0,60}?\b(password|passwd|pwd|passphrase|passcode)\b)\s+(\S{6,256})$").expect("regex"));
 /// A credential word followed by a separator: what follows is masked.
 static LABELLED_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(password|passwd|pwd|passphrase|passcode|pin|secret|token|key|keu|apikey)\b([^:=]{0,20}?)(\s*(?::|=|\s-\s)\s*)\S.*$")
@@ -89,8 +86,25 @@ fn secretish(t: &str) -> bool {
 fn url_has_secret(u: &str) -> bool {
     let Ok(url) = url::Url::parse(u) else { return false };
     url.password().is_some_and(|p| !p.is_empty())
-        || url.path_segments().is_some_and(|mut segs| segs.any(|seg| seg.len() >= 16 && secretish(seg)))
-        || url.query_pairs().any(|(k, v)| v.len() >= 12 && (secretish(&v) || ["key", "token", "secret", "sig", "signature", "apikey", "api_key", "access_token", "password"].contains(&k.to_lowercase().as_str())))
+        || url
+            .path_segments()
+            .is_some_and(|mut segs| segs.any(|seg| seg.len() >= 16 && secretish(seg)))
+        || url.query_pairs().any(|(k, v)| {
+            v.len() >= 12
+                && (secretish(&v)
+                    || [
+                        "key",
+                        "token",
+                        "secret",
+                        "sig",
+                        "signature",
+                        "apikey",
+                        "api_key",
+                        "access_token",
+                        "password",
+                    ]
+                    .contains(&k.to_lowercase().as_str()))
+        })
 }
 
 fn trim_token(t: &str) -> &str {
@@ -104,7 +118,11 @@ fn label_of(line: &str, values: &[&str]) -> String {
         s = s.replace(v, " ");
     }
     let s = s.replace(['❯', '$', '"', '\'', '`'], " ");
-    let s = s.trim().trim_end_matches([':', '-', '=', '–', '—', ' ']).trim_start_matches([':', '-', '=', ' ']).trim();
+    let s = s
+        .trim()
+        .trim_end_matches([':', '-', '=', '–', '—', ' '])
+        .trim_start_matches([':', '-', '=', ' '])
+        .trim();
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -128,7 +146,22 @@ pub fn mask_line(line: &str) -> String {
                 // Anything long after "password", "token"... may be the value itself.
                 || after_credential_word && t.len() >= 6 && t != "‹hidden›"
                 || t.chars().any(|c| !c.is_ascii_alphanumeric() && !"-_.,:;'()&/?!‹›".contains(c)) && t.len() >= 6;
-            if ["password", "passwd", "pwd", "passphrase", "passcode", "secret", "token", "key", "keu", "apikey", "login", "pin"].contains(&lower.as_str()) {
+            if [
+                "password",
+                "passwd",
+                "pwd",
+                "passphrase",
+                "passcode",
+                "secret",
+                "token",
+                "key",
+                "keu",
+                "apikey",
+                "login",
+                "pin",
+            ]
+            .contains(&lower.as_str())
+            {
                 after_credential_word = true;
             }
             if hide && !t.contains('‹') {
@@ -166,7 +199,11 @@ pub fn parse(text: &str) -> Parsed {
                 block.push(lines[i].trim().to_string());
                 i += 1;
             }
-            let label = if before.is_empty() { pending.take().map(|p| p.1).unwrap_or_default() } else { before };
+            let label = if before.is_empty() {
+                pending.take().map(|p| p.1).unwrap_or_default()
+            } else {
+                before
+            };
             out.push(Candidate::new(n, label, block.join("\n")));
             continue;
         }
@@ -232,8 +269,16 @@ pub fn parse(text: &str) -> Parsed {
                 env_names.push(None);
             }
         }
-        let emails: Vec<&str> = tokens.iter().copied().filter(|x| EMAIL.is_match(x) && !USER_HOST.is_match(x) || EMAIL.is_match(x)).collect();
-        let logins: Vec<&str> = tokens.iter().copied().filter(|x| USER_HOST.is_match(x) && !EMAIL.is_match(x)).collect();
+        let emails: Vec<&str> = tokens
+            .iter()
+            .copied()
+            .filter(|x| EMAIL.is_match(x) && !USER_HOST.is_match(x) || EMAIL.is_match(x))
+            .collect();
+        let logins: Vec<&str> = tokens
+            .iter()
+            .copied()
+            .filter(|x| USER_HOST.is_match(x) && !EMAIL.is_match(x))
+            .collect();
         let urls: Vec<&str> = tokens.iter().copied().filter(|x| URL.is_match(x)).collect();
 
         if values.is_empty() {
@@ -276,7 +321,9 @@ pub fn parse(text: &str) -> Parsed {
         // A UUID next to another value is that value's ID. On its own it's
         // usually an ID too (a session or object ID), unless the label says key.
         let (ids, rest): (Vec<_>, Vec<_>) = values.iter().zip(env_names).partition(|(v, _)| UUID.is_match(v));
-        let labelled_key = words(&label).iter().any(|w| ["key", "token", "secret", "password", "apikey"].contains(&w.as_str()));
+        let labelled_key = words(&label)
+            .iter()
+            .any(|w| ["key", "token", "secret", "password", "apikey"].contains(&w.as_str()));
         let rest = if rest.is_empty() && labelled_key { ids.clone() } else { rest };
         for (v, env) in rest {
             let mut c = Candidate::new(n, label.clone(), v.clone());
@@ -293,22 +340,43 @@ pub fn parse(text: &str) -> Parsed {
     report(pending, &mut unmatched);
     pair_up(&mut out);
     out.truncate(MAX_ITEMS);
-    Parsed { candidates: out, unmatched }
+    Parsed {
+        candidates: out,
+        unmatched,
+    }
 }
 
 /// Reports a label line that never got a value, if it looks like it named a
 /// credential (rather than being a section heading or dialog text).
 fn report(pending: Option<(usize, String)>, out: &mut Vec<Unmatched>) {
-    const WORDS: &[&str] = &["key", "token", "ssh", "password", "secret", "api", "apns", "login", "credential", "pat"];
+    const WORDS: &[&str] = &[
+        "key",
+        "token",
+        "ssh",
+        "password",
+        "secret",
+        "api",
+        "apns",
+        "login",
+        "credential",
+        "pat",
+    ];
     if let Some((line, text)) = pending
         && words(&text).iter().any(|w| WORDS.iter().any(|k| w.starts_with(k)))
     {
-        out.push(Unmatched { line, text: mask_line(&text) });
+        out.push(Unmatched {
+            line,
+            text: mask_line(&text),
+        });
     }
 }
 
 fn words(s: &str) -> Vec<String> {
-    s.to_lowercase().split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect()
+    s.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// Joins values that belong together: "Key - X" followed by "Secret - Y",
@@ -330,7 +398,10 @@ fn pair_up(c: &mut Vec<Candidate>) {
             let field = if pw.iter().any(|w| w == "client") { "client_id" } else { "key_id" };
             let mut merged = c.remove(i);
             let prev = c.remove(i - 1);
-            merged.label = label_of(&prev.label, &[]).trim_end_matches(|ch: char| ch.is_alphabetic()).trim().to_string();
+            merged.label = label_of(&prev.label, &[])
+                .trim_end_matches(|ch: char| ch.is_alphabetic())
+                .trim()
+                .to_string();
             if merged.label.chars().filter(char::is_ascii_alphabetic).count() < 2 {
                 merged.label = prev.label.clone();
             }
@@ -412,11 +483,7 @@ pub struct Proposal {
 
 /// Builds proposals. `existing` is the vault's (name, provider) list;
 /// `vault_dup` finds a vault secret already holding a value.
-pub fn propose(
-    parsed: &Parsed,
-    existing: &[(String, Option<String>)],
-    vault_dup: impl Fn(&str) -> Option<String>,
-) -> Vec<Proposal> {
+pub fn propose(parsed: &Parsed, existing: &[(String, Option<String>)], vault_dup: impl Fn(&str) -> Option<String>) -> Vec<Proposal> {
     let mut taken: Vec<String> = existing.iter().map(|e| e.0.clone()).collect();
     let mut out: Vec<Proposal> = vec![];
     for (id, c) in parsed.candidates.iter().enumerate() {
@@ -428,7 +495,12 @@ pub fn propose(
                 p.needs
                     .iter()
                     .filter(|n| n.name == "base_url" || n.secret || fields_v.get(n.name).is_none())
-                    .map(|n| NeedView { name: n.name, label: n.label, secret: n.secret, hint: n.hint })
+                    .map(|n| NeedView {
+                        name: n.name,
+                        label: n.label,
+                        secret: n.secret,
+                        hint: n.hint,
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -460,7 +532,9 @@ pub fn propose(
     }
     // Managers: when exactly one secret of the managing provider exists.
     for i in 0..out.len() {
-        let Some(pp) = out[i].provider.and_then(providers::by_id).and_then(|p| p.parent_provider) else { continue };
+        let Some(pp) = out[i].provider.and_then(providers::by_id).and_then(|p| p.parent_provider) else {
+            continue;
+        };
         let mut found: Vec<String> = out
             .iter()
             .enumerate()
@@ -478,13 +552,13 @@ pub fn propose(
 // ---------------------------------------------------------------- naming
 
 const STOP: &[&str] = &[
-    "api", "key", "keu", "keys", "token", "tokens", "secret", "the", "is", "your", "welcome", "to", "for", "this", "a", "an",
-    "my", "of", "in", "and", "with", "value", "code", "it", "be", "will", "here", "private", "access", "pat", "s",
+    "api", "key", "keu", "keys", "token", "tokens", "secret", "the", "is", "your", "welcome", "to", "for", "this", "a", "an", "my", "of",
+    "in", "and", "with", "value", "code", "it", "be", "will", "here", "private", "access", "pat", "s",
 ];
 
 /// Conventional environment-variable names, so apps find keys where they expect them.
-fn env_default(p: Option<&Provider>) -> &'static str {
-    match p.map(|p| p.id) {
+fn env_default(p: Option<&Provider>) -> String {
+    let name = match p.map(|p| p.id) {
         Some("anthropic") => "ANTHROPIC_API_KEY",
         Some("anthropic-admin") => "ANTHROPIC_ADMIN_KEY",
         Some("openrouter") => "OPENROUTER_API_KEY",
@@ -520,12 +594,27 @@ fn env_default(p: Option<&Provider>) -> &'static str {
         Some("apns") => "APNS_KEY",
         Some("password") => "PASSWORD",
         Some("hostinger") => "HOSTINGER_ROOT_PASSWORD",
-        _ => "KEY",
-    }
+        Some("stripe-live") => "STRIPE_SECRET_KEY",
+        Some("stripe-test") => "STRIPE_TEST_SECRET_KEY",
+        Some("gitlab") => "GITLAB_TOKEN",
+        Some("npm") => "NPM_TOKEN",
+        Some("digitalocean") => "DIGITALOCEAN_TOKEN",
+        Some("replicate") => "REPLICATE_API_TOKEN",
+        Some("aws") => "AWS_SECRET_ACCESS_KEY",
+        Some("private-key") => "PRIVATE_KEY",
+        Some("jwt") => "JWT_TOKEN",
+        // Any other known provider: <PROVIDER>_API_KEY, e.g. LINEAR_API_KEY.
+        Some(id) => return format!("{}_API_KEY", id.to_ascii_uppercase().replace('-', "_")),
+        None => "KEY",
+    };
+    name.to_string()
 }
 
 fn generic_env(n: &str) -> bool {
-    matches!(n, "API_KEY" | "KEY" | "TOKEN" | "SECRET" | "APIKEY" | "ACCESS_TOKEN" | "SECRET_KEY" | "PASSWORD")
+    matches!(
+        n,
+        "API_KEY" | "KEY" | "TOKEN" | "SECRET" | "APIKEY" | "ACCESS_TOKEN" | "SECRET_KEY" | "PASSWORD"
+    )
 }
 
 /// Suggests a name like `OPENROUTER_CHATBOT_API_KEY`: the conventional name
@@ -537,13 +626,18 @@ pub fn suggest_name(c: &Candidate, p: Option<&Provider>) -> String {
         return e.to_ascii_uppercase();
     }
     let base = env_default(p);
+    let base = base.as_str();
     // A generic NAME=value inside a command line: the line's other words are
     // command syntax, not a description.
     if c.env_name.is_some() {
         return base.to_string();
     }
     let provider_text = p
-        .map(|p| format!("{} {} {}", p.id, p.name, p.hints.join(" ")).to_lowercase().replace([' ', '-', '(', ')'], ""))
+        .map(|p| {
+            format!("{} {} {}", p.id, p.name, p.hints.join(" "))
+                .to_lowercase()
+                .replace([' ', '-', '(', ')'], "")
+        })
         .unwrap_or_default();
     let keep_hints = p.is_none_or(|p| p.id == "password");
     if p.is_some_and(|p| p.id == "hostinger") {
@@ -570,7 +664,11 @@ pub fn suggest_name(c: &Candidate, p: Option<&Provider>) -> String {
             None => format!("{base}_{q}"),
         }
     };
-    let name: String = name.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_').take(100).collect();
+    let name: String = name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .take(100)
+        .collect();
     if name.is_empty() { "IMPORTED_KEY".into() } else { name }
 }
 
@@ -620,14 +718,13 @@ pub fn preview(value: &str, p: Option<&Provider>) -> String {
     let n = value.chars().count();
     let prefix = p
         .filter(|p| p.kind == "api_key")
-        .and_then(|p| {
-            p.patterns
-                .iter()
-                .map(|pat| literal_prefix(pat, value))
-                .find(|pre| !pre.is_empty())
-        })
+        .and_then(|p| p.patterns.iter().map(|pat| literal_prefix(pat, value)).find(|pre| !pre.is_empty()))
         .unwrap_or_default();
-    if prefix.is_empty() { format!("•••• ({n} chars)") } else { format!("{prefix}… ({n} chars)") }
+    if prefix.is_empty() {
+        format!("•••• ({n} chars)")
+    } else {
+        format!("{prefix}… ({n} chars)")
+    }
 }
 
 #[cfg(test)]
@@ -663,8 +760,14 @@ mod tests {
             format!("Tavily you@example.com : tvly-dev-{}", "Tv9".repeat(16)),
             format!("Alpaca: Key - PK{}", "7Q3R5T".repeat(4)),
             format!("Secret - {}", "aZ9".repeat(14) + "xy"),
-            format!(r#"❯ claude mcp add magic --scope user --env API_KEY="{}" -- npx -y @21st-dev/magic@latest"#, "c0ffee".repeat(10) + "abcd"),
-            format!("Google signed: 123456789012-{}.apps.googleusercontent.com", "abc123def456".repeat(3)),
+            format!(
+                r#"❯ claude mcp add magic --scope user --env API_KEY="{}" -- npx -y @21st-dev/magic@latest"#,
+                "c0ffee".repeat(10) + "abcd"
+            ),
+            format!(
+                "Google signed: 123456789012-{}.apps.googleusercontent.com",
+                "abc123def456".repeat(3)
+            ),
             "You will no longer be able to view or download the client secret once you close this dialog.".into(),
             "Client secret".into(),
             format!("GOCSPX-{}", "Gq4".repeat(9) + "z"),
@@ -680,7 +783,10 @@ mod tests {
     }
 
     fn by_label<'a>(p: &'a Parsed, needle: &str) -> &'a Candidate {
-        p.candidates.iter().find(|c| c.label.to_lowercase().contains(&needle.to_lowercase())).unwrap_or_else(|| panic!("no '{needle}'"))
+        p.candidates
+            .iter()
+            .find(|c| c.label.to_lowercase().contains(&needle.to_lowercase()))
+            .unwrap_or_else(|| panic!("no '{needle}'"))
     }
 
     #[test]
@@ -690,9 +796,25 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "unifi", "github", "huggingface", "cloudflare", "alphavantage", "alphavantage", "anthropic", "n8n",
-                "openrouter-management", "openrouter", "azure-app-secret", "github", "tavily", "alpaca-paper", "magic-21st",
-                "google-oauth-client", "password", "crypto-wallet", "?"
+                "unifi",
+                "github",
+                "huggingface",
+                "cloudflare",
+                "alphavantage",
+                "alphavantage",
+                "anthropic",
+                "n8n",
+                "openrouter-management",
+                "openrouter",
+                "azure-app-secret",
+                "github",
+                "tavily",
+                "alpaca-paper",
+                "magic-21st",
+                "google-oauth-client",
+                "password",
+                "crypto-wallet",
+                "?"
             ]
         );
         // The JWT on its own line takes the label from the line above.
@@ -706,11 +828,22 @@ mod tests {
         // Metadata lines attach to the secret above them.
         let host = by_label(&p, "vps");
         assert_eq!(host.fields["ssh_login"], "root@203.0.113.7");
-        assert_eq!(host.material.value, "Blue Kite 42 &; tree", "passwords keep their spaces and symbols");
-        assert_eq!(by_label(&p, "helper").notes[0], "Related site: https://box.example.ts.net", "only the site, never a path");
+        assert_eq!(
+            host.material.value, "Blue Kite 42 &; tree",
+            "passwords keep their spaces and symbols"
+        );
+        assert_eq!(
+            by_label(&p, "helper").notes[0],
+            "Related site: https://box.example.ts.net",
+            "only the site, never a path"
+        );
         assert_eq!(by_label(&p, "tavily").fields["email"], "you@example.com");
         // The magic key comes out of the command line, without the package name.
-        let magic = p.candidates.iter().find(|c| c.provider().is_some_and(|p| p.id == "magic-21st")).unwrap();
+        let magic = p
+            .candidates
+            .iter()
+            .find(|c| c.provider().is_some_and(|p| p.id == "magic-21st"))
+            .unwrap();
         assert_eq!(magic.material.value.len(), 64);
         // Lines with a label but no value are reported.
         let un: Vec<_> = p.unmatched.iter().map(|u| u.text.as_str()).collect();
@@ -723,7 +856,11 @@ mod tests {
     fn suggests_conventional_unique_names() {
         let p = parse(&sample());
         let mut taken = vec![];
-        let names: Vec<String> = p.candidates.iter().map(|c| unique(&suggest_name(c, c.provider()), &mut taken)).collect();
+        let names: Vec<String> = p
+            .candidates
+            .iter()
+            .map(|c| unique(&suggest_name(c, c.provider()), &mut taken))
+            .collect();
         let want = [
             "UNIFI_GARAGE_API_KEY",
             "GITHUB_WEB_APP_PROJECT_TOKEN",
@@ -749,13 +886,37 @@ mod tests {
     }
 
     #[test]
+    fn every_known_provider_gets_a_real_name() {
+        for p in providers::PROVIDERS {
+            assert_ne!(env_default(Some(p)), "KEY", "{} needs a conventional name", p.id);
+        }
+        let c = |line: String| parse(&line).candidates.remove(0);
+        let lin = c(format!("Linear: lin_api_{}", "Ln4".repeat(13) + "x"));
+        assert_eq!(suggest_name(&lin, lin.provider()), "LINEAR_API_KEY");
+        let st = c(format!("Stripe - sk_live_{}", "St9".repeat(33)));
+        assert_eq!(suggest_name(&st, st.provider()), "STRIPE_SECRET_KEY");
+        let unknown = c(format!("Mailgun: key-{}", "4f".repeat(16)));
+        assert_eq!(
+            suggest_name(&unknown, unknown.provider()),
+            "MAILGUN_KEY",
+            "unknown providers still use the label"
+        );
+    }
+
+    #[test]
     fn proposals_flag_duplicates_needs_and_managers() {
         let p = parse(&sample());
         let props = propose(&p, &[("ANTHROPIC_API_KEY".into(), Some("anthropic".into()))], |_| None);
         let gh: Vec<_> = props.iter().filter(|x| x.provider == Some("github")).collect();
         assert!(gh[0].include && gh[0].duplicate_of.is_none());
         assert!(!gh[1].include, "the second copy is skipped");
-        assert!(gh[1].duplicate_of.as_deref().unwrap().starts_with("GITHUB_WEB_APP_PROJECT_TOKEN (line"));
+        assert!(
+            gh[1]
+                .duplicate_of
+                .as_deref()
+                .unwrap()
+                .starts_with("GITHUB_WEB_APP_PROJECT_TOKEN (line")
+        );
         let claude = props.iter().find(|x| x.provider == Some("anthropic")).unwrap();
         assert_eq!(claude.name, "ANTHROPIC_API_KEY_2", "names never clash with the vault");
         let or = props.iter().find(|x| x.provider == Some("openrouter")).unwrap();
@@ -774,7 +935,14 @@ mod tests {
             assert!(!all.contains(&c.material.value), "no value may appear in a proposal");
         }
         let dup = propose(&p, &[], |v| v.starts_with("hf_").then(|| "OLD_HF".to_string()));
-        assert_eq!(dup.iter().find(|x| x.provider == Some("huggingface")).unwrap().duplicate_of.as_deref(), Some("OLD_HF"));
+        assert_eq!(
+            dup.iter()
+                .find(|x| x.provider == Some("huggingface"))
+                .unwrap()
+                .duplicate_of
+                .as_deref(),
+            Some("OLD_HF")
+        );
     }
 
     #[test]
@@ -791,7 +959,11 @@ mod tests {
         ]
         .join("\n");
         let p = parse(&text);
-        let o = p.candidates.iter().find(|c| c.material.value == openai).expect("the OpenAI key stays a value");
+        let o = p
+            .candidates
+            .iter()
+            .find(|c| c.material.value == openai)
+            .expect("the OpenAI key stays a value");
         assert!(o.fields.is_empty(), "a real key is never turned into a plaintext ID");
         assert!(p.candidates.iter().any(|c| c.material.value == hook), "a webhook URL is a secret");
         assert!(p.candidates.iter().any(|c| c.material.value == "hunter22x"));
@@ -834,10 +1006,23 @@ mod tests {
     fn previews_and_masking_hide_values() {
         let or = format!("sk-or-v1-{}", "0a".repeat(32));
         assert_eq!(preview(&or, providers::by_id("openrouter")), "sk-or-v1-… (73 chars)");
-        assert_eq!(preview(&format!("ghp_{}", r('A', 36)), providers::by_id("github")), "ghp_… (40 chars)");
-        assert_eq!(preview(&format!("abc8Q~{}", "y1".repeat(17)), providers::by_id("azure-app-secret")), "•••• (40 chars)");
-        assert_eq!(preview(&"Ab1_".repeat(10), providers::by_id("cloudflare")), "•••• (40 chars)", "legacy tokens have no public prefix");
-        assert_eq!(literal_prefix(r"^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$", "sk-ant-api03-x"), "sk-ant-api");
+        assert_eq!(
+            preview(&format!("ghp_{}", r('A', 36)), providers::by_id("github")),
+            "ghp_… (40 chars)"
+        );
+        assert_eq!(
+            preview(&format!("abc8Q~{}", "y1".repeat(17)), providers::by_id("azure-app-secret")),
+            "•••• (40 chars)"
+        );
+        assert_eq!(
+            preview(&"Ab1_".repeat(10), providers::by_id("cloudflare")),
+            "•••• (40 chars)",
+            "legacy tokens have no public prefix"
+        );
+        assert_eq!(
+            literal_prefix(r"^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$", "sk-ant-api03-x"),
+            "sk-ant-api"
+        );
         assert_eq!(literal_prefix(r"^(sk|rk)_live_[A-Za-z0-9]{20,}$", "rk_live_abc"), "rk_live_");
         assert_eq!(literal_prefix(r"^[A-Za-z0-9_~.\-]{3}\dQ~", "abc8Q~"), "");
         assert_eq!(preview("hunter2hunter2", providers::by_id("password")), "•••• (14 chars)");

@@ -34,7 +34,10 @@ pub fn valid_part_name(n: &str) -> bool {
 
 impl Material {
     pub fn single(value: impl Into<String>) -> Self {
-        Self { value: value.into(), extras: vec![] }
+        Self {
+            value: value.into(),
+            extras: vec![],
+        }
     }
 
     /// Serialises for encryption. Returns (format, bytes).
@@ -76,7 +79,9 @@ impl Material {
 
     /// Every secret string, for redaction.
     pub fn secrets(&self) -> Vec<&str> {
-        std::iter::once(self.value.as_str()).chain(self.extras.iter().map(|e| e.value.as_str())).collect()
+        std::iter::once(self.value.as_str())
+            .chain(self.extras.iter().map(|e| e.value.as_str()))
+            .collect()
     }
 }
 

@@ -171,7 +171,11 @@ impl Vault {
 }
 
 #[cfg(test)]
-pub const TEST_KDF: KdfParams = KdfParams { m_cost_kib: 256, t_cost: 1, p_cost: 1 };
+pub const TEST_KDF: KdfParams = KdfParams {
+    m_cost_kib: 256,
+    t_cost: 1,
+    p_cost: 1,
+};
 
 #[cfg(test)]
 mod tests {
@@ -191,7 +195,10 @@ mod tests {
         assert!(v.decrypt(7, 2, 0, &ct, &dek).is_err(), "and to its version");
         assert!(v.decrypt(7, 1, 1, &ct, &dek).is_err(), "and to its format");
         let (ct1, dek1) = v.encrypt(7, 1, 1, b"{}").unwrap();
-        assert!(v.decrypt(7, 1, 0, &ct1, &dek1).is_err(), "a JSON value can't be read back as a plain one");
+        assert!(
+            v.decrypt(7, 1, 0, &ct1, &dek1).is_err(),
+            "a JSON value can't be read back as a plain one"
+        );
 
         v.seal();
         assert!(matches!(v.decrypt(7, 1, 0, &ct, &dek), Err(VaultError::Sealed)));
@@ -204,7 +211,8 @@ mod tests {
         assert_ne!(f, v.fingerprint(b"pw2").unwrap());
         assert_ne!(f, crate::crypto::sha256(b"pw"), "keyed, not a plain hash");
 
-        v.change_passphrase(&db, "correct horse battery", "new passphrase here", TEST_KDF).unwrap();
+        v.change_passphrase(&db, "correct horse battery", "new passphrase here", TEST_KDF)
+            .unwrap();
         v.seal();
         assert!(v.unlock(&db, "correct horse battery").is_err());
         v.unlock(&db, "new passphrase here").unwrap();

@@ -154,7 +154,10 @@ async fn call_tool(app: &AppRef, p: &Principal, tool: &str, args: &Value) -> (Va
         "list_secrets" => {
             let ev = EventInfo::new("mcp.list", p.label());
             if !p.has(Scope::List) {
-                return (tool_text(json!({"error": "this token can't list secrets"}), true), Some(ev.detail("scope denied")));
+                return (
+                    tool_text(json!({"error": "this token can't list secrets"}), true),
+                    Some(ev.detail("scope denied")),
+                );
             }
             let q = s("query").unwrap_or_default().to_lowercase();
             let list = match app.db.secret_list() {
@@ -183,7 +186,10 @@ async fn call_tool(app: &AppRef, p: &Principal, tool: &str, args: &Value) -> (Va
             let name = s("name").unwrap_or_default();
             let ev = EventInfo::new("mcp.describe", p.label()).secret(&name);
             if !p.allows(Scope::List, &name) {
-                return (tool_text(json!({"error": "not allowed for this token"}), true), Some(ev.detail("scope denied")));
+                return (
+                    tool_text(json!({"error": "not allowed for this token"}), true),
+                    Some(ev.detail("scope denied")),
+                );
             }
             match app.db.secret_get(&name) {
                 Ok(Some(m)) if p.may_use(&m) => {
@@ -218,19 +224,31 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     let name = args.get("secret").and_then(Value::as_str).unwrap_or("").to_string();
     let method_s = args.get("method").and_then(Value::as_str).unwrap_or("GET").to_ascii_uppercase();
     let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-    let query = args.get("query").and_then(Value::as_str).map(|q| q.trim_start_matches('?').to_string());
-    let ev = EventInfo::new("mcp.proxy", p.label()).secret(&name).detail(format!("{method_s} {}", path.chars().take(200).collect::<String>()));
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(|q| q.trim_start_matches('?').to_string());
+    let ev = EventInfo::new("mcp.proxy", p.label())
+        .secret(&name)
+        .detail(format!("{method_s} {}", path.chars().take(200).collect::<String>()));
     let fail = |msg: String, ev: EventInfo| (tool_text(json!({ "error": msg }), true), Some(ev));
 
     if !p.allows(Scope::Proxy, &name) {
-        return fail("this token may not use that key through the proxy".into(), ev.detail("scope denied"));
+        return fail(
+            "this token may not use that key through the proxy".into(),
+            ev.detail("scope denied"),
+        );
     }
     let Ok(method) = Method::from_bytes(method_s.as_bytes()) else {
         return fail("unsupported method".into(), ev);
     };
     let get_only = matches!(p, Principal::Token(t) if t.proxy_get_only);
     if !proxy::allowed_method(&method, get_only) {
-        let msg = if get_only { "this token may only send GET requests through the proxy" } else { "unsupported method" };
+        let msg = if get_only {
+            "this token may only send GET requests through the proxy"
+        } else {
+            "unsupported method"
+        };
         return fail(msg.into(), ev.detail("method denied"));
     }
     let meta = match app.db.secret_get(&name) {
@@ -239,7 +257,10 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
         Err(e) => return fail(e.to_string(), ev),
     };
     let Some(target) = proxy::target_for(&meta) else {
-        return fail("no proxy target for this secret; the owner can set one in the web interface".into(), ev);
+        return fail(
+            "no proxy target for this secret; the owner can set one in the web interface".into(),
+            ev,
+        );
     };
     let url = match proxy::build_url(&target.base, &path, query.as_deref()) {
         Ok(u) => u,
@@ -249,7 +270,10 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     let mut headers = HeaderMap::new();
     if let Some(obj) = args.get("headers").and_then(Value::as_object) {
         for (k, v) in obj {
-            if let (Ok(n), Some(Ok(val))) = (HeaderName::from_bytes(k.to_ascii_lowercase().as_bytes()), v.as_str().map(HeaderValue::from_str)) {
+            if let (Ok(n), Some(Ok(val))) = (
+                HeaderName::from_bytes(k.to_ascii_lowercase().as_bytes()),
+                v.as_str().map(HeaderValue::from_str),
+            ) {
                 headers.insert(n, val);
             }
         }
@@ -259,7 +283,9 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
         None | Some(Value::Null) => Bytes::new(),
         Some(Value::String(s)) => Bytes::from(s.clone()),
         Some(v) => {
-            headers.entry(header::CONTENT_TYPE).or_insert(HeaderValue::from_static("application/json"));
+            headers
+                .entry(header::CONTENT_TYPE)
+                .or_insert(HeaderValue::from_static("application/json"));
             Bytes::from(v.to_string())
         }
     };
@@ -273,7 +299,10 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
         Ok(m) => m,
         Err(e) => return fail(e.msg, ev),
     };
-    let creds = proxy::Creds { material: &material, fields: &meta.fields };
+    let creds = proxy::Creds {
+        material: &material,
+        fields: &meta.fields,
+    };
     let mut redactor = proxy::Redactor::for_creds(&creds, &target.auth);
     redactor.extend(&stored.secrets());
     let (mut resp, upstream) = match proxy::send(&app.http, &target, &creds, method, url, headers, body).await {
@@ -283,7 +312,12 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     drop((material, stored));
     let _ = app.db.secret_touch(meta.id);
     let status = resp.status().as_u16();
-    let content_type = resp.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     // Read at most a little past the limit, so a huge body can't exhaust memory.
     let mut bytes = Vec::new();
     let mut truncated = false;

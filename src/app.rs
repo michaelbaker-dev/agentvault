@@ -18,8 +18,8 @@ use crate::auth::{self, LoginLimiter, Principal, Sessions};
 use crate::config::Config;
 use crate::crypto::KdfParams;
 use crate::db::{Db, NewEvent, NewValue, SecretMeta, now_ms};
-use crate::material::Material;
 use crate::identity::{Caller, Resolver};
+use crate::material::Material;
 use crate::vault::{Vault, VaultError};
 
 pub struct App {
@@ -94,7 +94,13 @@ pub struct EventInfo {
 
 impl EventInfo {
     pub fn new(action: &'static str, actor: impl Into<String>) -> Self {
-        Self { action, secret: None, actor: actor.into(), upstream_us: None, detail: None }
+        Self {
+            action,
+            secret: None,
+            actor: actor.into(),
+            upstream_us: None,
+            detail: None,
+        }
     }
     pub fn secret(mut self, s: impl Into<String>) -> Self {
         self.secret = Some(s.into());
@@ -125,7 +131,11 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(status: StatusCode, msg: impl Into<String>) -> Self {
-        Self { status, msg: msg.into(), event: None }
+        Self {
+            status,
+            msg: msg.into(),
+            event: None,
+        }
     }
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, msg)
@@ -170,7 +180,8 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut r = (self.status, Json(json!({ "error": self.msg }))).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
-            r.headers_mut().insert(header::WWW_AUTHENTICATE, "Bearer realm=\"keys\"".parse().expect("static"));
+            r.headers_mut()
+                .insert(header::WWW_AUTHENTICATE, "Bearer realm=\"keys\"".parse().expect("static"));
         }
         if let Some(ev) = self.event {
             r.extensions_mut().insert(*ev);
@@ -182,7 +193,12 @@ impl IntoResponse for ApiError {
 pub type ApiResult<T = Response> = Result<T, ApiError>;
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ").map(str::trim)
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
 }
 
 pub fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -230,7 +246,10 @@ impl App {
             if !auth::ct_eq(sent, &s.csrf) {
                 return Err(ApiError::forbidden("missing or wrong CSRF header"));
             }
-            return Ok(Principal::Owner { session: s.id, fresh: s.fresh });
+            return Ok(Principal::Owner {
+                session: s.id,
+                fresh: s.fresh,
+            });
         }
         Err(ApiError::unauthorized("sign in, or send Authorization: Bearer <token>"))
     }
@@ -315,8 +334,15 @@ impl App {
         let mac = self.vault.fingerprint(m.value.as_bytes())?;
         let (format, bytes) = m.encode();
         let parts = m.extra_names();
-        let nv = NewValue { format, parts: &parts, mac: &mac, provider_ref };
-        Ok(self.db.secret_add_version(id, &nv, |id, ver| self.vault.encrypt(id, ver, format, &bytes))?)
+        let nv = NewValue {
+            format,
+            parts: &parts,
+            mac: &mac,
+            provider_ref,
+        };
+        Ok(self
+            .db
+            .secret_add_version(id, &nv, |id, ver| self.vault.encrypt(id, ver, format, &bytes))?)
     }
 
     /// Another secret already holding this value, if any.

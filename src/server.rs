@@ -19,10 +19,10 @@ use crate::auth::{self, Principal, Scope};
 use crate::dashboard;
 use crate::db::{NewValue, SecretMeta, Settings};
 use crate::describe;
-use crate::material::{self, Extra, Material};
-use crate::providers;
 use crate::identity::Caller;
+use crate::material::{self, Extra, Material};
 use crate::mcp;
+use crate::providers;
 use crate::proxy;
 use crate::vault::{Vault, VaultError};
 use crate::web;
@@ -117,7 +117,12 @@ async fn guard(State(app): State<AppRef>, ConnectInfo(addr): ConnectInfo<SocketA
     if let Some(ev) = resp.extensions_mut().remove::<EventInfo>() {
         app.record(&caller, ev, status, latency);
     } else if is_api && matches!(status, 401 | 403 | 429) && app.may_log_denied(caller.ip) {
-        app.record(&caller, EventInfo::new("denied", "unknown").detail(truncate(&path, 200)), status, latency);
+        app.record(
+            &caller,
+            EventInfo::new("denied", "unknown").detail(truncate(&path, 200)),
+            status,
+            latency,
+        );
     }
     secure(resp, is_api)
 }
@@ -170,7 +175,11 @@ pub(crate) fn clean_tags(tags: Option<Vec<String>>) -> ApiResult<Option<Vec<Stri
         if t.is_empty() {
             continue;
         }
-        if t.len() > 40 || !t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | ' ')) {
+        if t.len() > 40
+            || !t
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | ' '))
+        {
             return Err(ApiError::bad_request(format!("invalid tag '{}'", truncate(&t, 40))));
         }
         if !out.contains(&t) {
@@ -227,7 +236,11 @@ fn managed(app: &AppRef, m: &SecretMeta) -> ApiResult<bool> {
 
 /// Tokens never learn that an owner-only secret exists.
 fn require_use(p: &Principal, meta: &SecretMeta, ev: &EventInfo) -> ApiResult<()> {
-    if p.may_use(meta) { Ok(()) } else { Err(ApiError::not_found().event(ev.clone().detail("owner-only"))) }
+    if p.may_use(meta) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found().event(ev.clone().detail("owner-only")))
+    }
 }
 
 const KINDS: &[&str] = &["api_key", "password", "private_key", "other"];
@@ -274,8 +287,7 @@ fn require(p: &Principal, scope: Scope, secret: &str, ev: &EventInfo) -> ApiResu
     if p.allows(scope, secret) {
         Ok(())
     } else {
-        Err(ApiError::forbidden(format!("{} may not {} '{}'", p.label(), scope.as_str(), secret))
-            .event(ev.clone().detail("scope denied")))
+        Err(ApiError::forbidden(format!("{} may not {} '{}'", p.label(), scope.as_str(), secret)).event(ev.clone().detail("scope denied")))
     }
 }
 
@@ -320,8 +332,12 @@ async fn status(State(app): State<AppRef>, Extension(caller): Extension<Caller>)
 fn session_response(app: &AppRef, caller: &Caller, ev: EventInfo) -> Response {
     let (cookie_value, csrf) = app.sessions.create(&caller.node_id);
     let mut resp = with_event(Json(json!({ "signed_in": true, "csrf": csrf })), ev);
-    let c = format!("{}={cookie_value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", auth::SESSION_COOKIE);
-    resp.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&c).expect("ascii cookie"));
+    let c = format!(
+        "{}={cookie_value}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200",
+        auth::SESSION_COOKIE
+    );
+    resp.headers_mut()
+        .insert(header::SET_COOKIE, HeaderValue::from_str(&c).expect("ascii cookie"));
     resp
 }
 
@@ -331,12 +347,16 @@ async fn setup(State(app): State<AppRef>, Extension(caller): Extension<Caller>, 
         return Err(ApiError::forbidden("only the owner's devices can set up the vault").event(ev));
     }
     if body.passphrase.chars().count() < MIN_PASSPHRASE {
-        return Err(ApiError::bad_request(format!("use a passphrase of at least {MIN_PASSPHRASE} characters")));
+        return Err(ApiError::bad_request(format!(
+            "use a passphrase of at least {MIN_PASSPHRASE} characters"
+        )));
     }
     let _permit = app.kdf_gate.acquire().await.map_err(ApiError::internal)?;
     let a = app.clone();
     let pass = Zeroizing::new(body.passphrase.clone());
-    tokio::task::spawn_blocking(move || a.vault.initialize(&a.db, &pass, a.kdf)).await.map_err(ApiError::internal)??;
+    tokio::task::spawn_blocking(move || a.vault.initialize(&a.db, &pass, a.kdf))
+        .await
+        .map_err(ApiError::internal)??;
     Ok(session_response(&app, &caller, ev))
 }
 
@@ -362,20 +382,24 @@ async fn login(State(app): State<AppRef>, Extension(caller): Extension<Caller>, 
 /// Verifies the passphrase (unsealing if needed) under the attempt limiter.
 async fn check_passphrase(app: &AppRef, caller: &Caller, passphrase: &str, ev: &EventInfo) -> ApiResult<()> {
     if let Err(secs) = app.limiter.begin(caller.ip) {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, format!("too many wrong passphrases; try again in {secs}s"))
-            .event(ev.clone().detail("locked out")));
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("too many wrong passphrases; try again in {secs}s"),
+        )
+        .event(ev.clone().detail("locked out")));
     }
     let _permit = app.kdf_gate.acquire().await.map_err(ApiError::internal)?;
     let a = app.clone();
     let pass = Zeroizing::new(passphrase.to_string());
-    match tokio::task::spawn_blocking(move || a.vault.unlock(&a.db, &pass)).await.map_err(ApiError::internal)? {
+    match tokio::task::spawn_blocking(move || a.vault.unlock(&a.db, &pass))
+        .await
+        .map_err(ApiError::internal)?
+    {
         Ok(()) => {
             app.limiter.success(caller.ip);
             Ok(())
         }
-        Err(VaultError::BadPassphrase) => {
-            Err(ApiError::unauthorized("wrong passphrase").event(ev.clone().detail("wrong passphrase")))
-        }
+        Err(VaultError::BadPassphrase) => Err(ApiError::unauthorized("wrong passphrase").event(ev.clone().detail("wrong passphrase"))),
         Err(e) => Err(e.into()),
     }
 }
@@ -392,11 +416,21 @@ async fn confirm_passphrase(
     };
     let ev = EventInfo::new("confirm", "owner (web)");
     // A wrong passphrase here must not look like an expired session to the UI.
-    check_passphrase(&app, &caller, &body.passphrase, &ev)
-        .await
-        .map_err(|e| if e.status == StatusCode::UNAUTHORIZED { ApiError { status: StatusCode::FORBIDDEN, ..e } } else { e })?;
+    check_passphrase(&app, &caller, &body.passphrase, &ev).await.map_err(|e| {
+        if e.status == StatusCode::UNAUTHORIZED {
+            ApiError {
+                status: StatusCode::FORBIDDEN,
+                ..e
+            }
+        } else {
+            e
+        }
+    })?;
     app.sessions.reverify(&session);
-    Ok(with_event(Json(json!({ "confirmed": true, "valid_for_secs": auth::FRESH_FOR.as_secs() })), ev))
+    Ok(with_event(
+        Json(json!({ "confirmed": true, "valid_for_secs": auth::FRESH_FOR.as_secs() })),
+        ev,
+    ))
 }
 
 async fn logout(State(app): State<AppRef>, Extension(caller): Extension<Caller>, headers: HeaderMap) -> ApiResult {
@@ -405,7 +439,8 @@ async fn logout(State(app): State<AppRef>, Extension(caller): Extension<Caller>,
     }
     let mut resp = with_event(Json(json!({ "signed_in": false })), EventInfo::new("logout", "owner (web)"));
     let c = format!("{}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0", auth::SESSION_COOKIE);
-    resp.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&c).expect("ascii"));
+    resp.headers_mut()
+        .insert(header::SET_COOKIE, HeaderValue::from_str(&c).expect("ascii"));
     Ok(resp)
 }
 
@@ -415,7 +450,10 @@ async fn seal(State(app): State<AppRef>, Extension(caller): Extension<Caller>, h
     app.minted.clear();
     app.imports.lock().unwrap_or_else(|p| p.into_inner()).clear();
     app.sessions.clear();
-    Ok(with_event(Json(json!({ "sealed": true })), EventInfo::new("vault.seal", "owner (web)")))
+    Ok(with_event(
+        Json(json!({ "sealed": true })),
+        EventInfo::new("vault.seal", "owner (web)"),
+    ))
 }
 
 async fn change_passphrase(
@@ -429,10 +467,15 @@ async fn change_passphrase(
     };
     let ev = EventInfo::new("vault.passphrase", "owner (web)");
     if body.new.chars().count() < MIN_PASSPHRASE {
-        return Err(ApiError::bad_request(format!("use a passphrase of at least {MIN_PASSPHRASE} characters")));
+        return Err(ApiError::bad_request(format!(
+            "use a passphrase of at least {MIN_PASSPHRASE} characters"
+        )));
     }
     if let Err(secs) = app.limiter.begin(caller.ip) {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, format!("too many wrong passphrases; try again in {secs}s")));
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("too many wrong passphrases; try again in {secs}s"),
+        ));
     }
     let _permit = app.kdf_gate.acquire().await.map_err(ApiError::internal)?;
     let a = app.clone();
@@ -448,7 +491,10 @@ async fn change_passphrase(
         // Does the stored boot passphrase still match?
         let mut stale = false;
         if a.auto_unlock.get() != AutoUnlock::OFF {
-            stale = a.cfg.unlock_passphrase().is_none_or(|stored| crate::crypto::sha256(stored.as_bytes()) != crate::crypto::sha256(new.as_bytes()));
+            stale = a
+                .cfg
+                .unlock_passphrase()
+                .is_none_or(|stored| crate::crypto::sha256(stored.as_bytes()) != crate::crypto::sha256(new.as_bytes()));
             a.auto_unlock.set(if stale { AutoUnlock::STALE } else { AutoUnlock::ON });
         }
         Ok::<_, crate::vault::VaultError>(stale)
@@ -458,7 +504,14 @@ async fn change_passphrase(
     .map_err(|e| {
         let e = ApiError::from(e);
         // Wrong current passphrase: a 403, so the UI doesn't treat it as signed out.
-        let e = if e.status == StatusCode::UNAUTHORIZED { ApiError { status: StatusCode::FORBIDDEN, ..e } } else { e };
+        let e = if e.status == StatusCode::UNAUTHORIZED {
+            ApiError {
+                status: StatusCode::FORBIDDEN,
+                ..e
+            }
+        } else {
+            e
+        };
         e.event(ev.clone().detail("failed"))
     })?;
     Ok(with_event(Json(json!({ "changed": true, "auto_unlock_stale": stale })), ev))
@@ -477,11 +530,20 @@ struct SecretView<'a> {
 
 fn view_with(m: &SecretMeta, all: &[SecretMeta]) -> serde_json::Value {
     let duplicates = match &m.value_mac {
-        Some(mac) => all.iter().filter(|o| o.id != m.id && o.value_mac.as_ref() == Some(mac)).map(|o| o.name.as_str()).collect(),
+        Some(mac) => all
+            .iter()
+            .filter(|o| o.id != m.id && o.value_mac.as_ref() == Some(mac))
+            .map(|o| o.name.as_str())
+            .collect(),
         None => vec![],
     };
     let target = proxy::target_for(m);
-    let mut v = serde_json::to_value(SecretView { meta: m, proxy_ready: target.is_some(), duplicates }).expect("json");
+    let mut v = serde_json::to_value(SecretView {
+        meta: m,
+        proxy_ready: target.is_some(),
+        duplicates,
+    })
+    .expect("json");
     // Where proxy paths go: the owner's base URL or the provider's default.
     v["proxy_target"] = target.map(|t| serde_json::Value::from(t.base.as_str())).unwrap_or_default();
     // `all` is what the caller may see; don't name a manager outside it.
@@ -504,7 +566,9 @@ fn view(app: &AppRef, m: &SecretMeta) -> ApiResult<serde_json::Value> {
 }
 
 fn load(app: &AppRef, name: &str, ev: &EventInfo) -> ApiResult<SecretMeta> {
-    app.db.secret_get(name)?.ok_or_else(|| ApiError::not_found().event(ev.clone().detail("not found")))
+    app.db
+        .secret_get(name)?
+        .ok_or_else(|| ApiError::not_found().event(ev.clone().detail("not found")))
 }
 
 #[derive(Deserialize)]
@@ -610,7 +674,9 @@ impl SettingsBody {
         }
         if let Some(d) = self.rotate_every_days {
             if !(0..=3650).contains(&d) {
-                return Err(ApiError::bad_request("rotate_every_days must be between 1 and 3650 (0 turns it off)"));
+                return Err(ApiError::bad_request(
+                    "rotate_every_days must be between 1 and 3650 (0 turns it off)",
+                ));
             }
             st.rotate_every_days = Some((d > 0).then_some(d));
         }
@@ -667,7 +733,11 @@ struct CreateBody {
 /// Fills in what the provider implies (kind, owner-only, schedule) where the
 /// caller didn't say.
 fn provider_defaults(st: &mut Settings, p: Option<&providers::Provider>) {
-    let kind = st.kind.clone().or_else(|| p.map(|p| p.kind.to_string())).unwrap_or_else(|| "api_key".into());
+    let kind = st
+        .kind
+        .clone()
+        .or_else(|| p.map(|p| p.kind.to_string()))
+        .unwrap_or_else(|| "api_key".into());
     if st.owner_only.is_none() {
         st.owner_only = Some(p.map(|p| p.owner_only).unwrap_or(false) || kind == "password");
     }
@@ -710,11 +780,19 @@ pub fn create_internal(app: &AppRef, mut ns: NewSecret) -> ApiResult<(SecretMeta
     let mac = app.vault.fingerprint(m.value.as_bytes())?;
     let (format, bytes) = m.encode();
     let parts = m.extra_names();
-    let nv = NewValue { format, parts: &parts, mac: &mac, provider_ref: None };
-    let id = app.db.secret_create(&ns.name, &ns.notes, &ns.tags, &ns.settings, &nv, |id, ver| app.vault.encrypt(id, ver, format, &bytes))?;
+    let nv = NewValue {
+        format,
+        parts: &parts,
+        mac: &mac,
+        provider_ref: None,
+    };
+    let id = app.db.secret_create(&ns.name, &ns.notes, &ns.tags, &ns.settings, &nv, |id, ver| {
+        app.vault.encrypt(id, ver, format, &bytes)
+    })?;
     drop(bytes);
     if let Some((base, auth)) = &ns.proxy {
-        app.db.secret_update_fields(id, None, None, None, Some((base.as_deref(), auth.as_deref())))?;
+        app.db
+            .secret_update_fields(id, None, None, None, Some((base.as_deref(), auth.as_deref())))?;
     }
     if let Some(p) = provider {
         app.db.secret_set_provider(id, p.id, p.name, p.risk)?;
@@ -737,13 +815,17 @@ async fn create_secret(
     let name = body.name.trim().to_string();
     let ev = EventInfo::new("secret.create", p.label()).secret(&name);
     if !valid_name(&name) {
-        return Err(ApiError::bad_request("names may use letters, digits, '_', '-' and '.', up to 128 characters"));
+        return Err(ApiError::bad_request(
+            "names may use letters, digits, '_', '-' and '.', up to 128 characters",
+        ));
     }
     require(&p, Scope::Write, &name, &ev)?;
     protect_describer_key(&app, &p, &name, &ev)?;
     if body.settings.any() && !p.is_owner() {
-        return Err(ApiError::forbidden("only the owner can set kind, owner-only, fields, provider, manager, schedule or proxy")
-            .event(ev.detail("settings denied")));
+        return Err(
+            ApiError::forbidden("only the owner can set kind, owner-only, fields, provider, manager, schedule or proxy")
+                .event(ev.detail("settings denied")),
+        );
     }
     check_value(&body.value)?;
     check_extras(&body.extras)?;
@@ -871,8 +953,10 @@ async fn update_secret(
     // A key that rotates, renews itself or manages others decides which key
     // the vault creates or revokes; a token writing it could steer that.
     if value_change && !p.is_owner() && managed(&app, &meta)? {
-        return Err(ApiError::forbidden("this key is managed by rotation; only the owner can change its value")
-            .event(ev.clone().detail("managed value denied")));
+        return Err(
+            ApiError::forbidden("this key is managed by rotation; only the owner can change its value")
+                .event(ev.clone().detail("managed value denied")),
+        );
     }
     let mut new_material = None;
     if value_change {
@@ -934,7 +1018,10 @@ async fn update_secret(
     if sb.any() && sb.proxy.is_none() {
         detail.push("settings".into());
     }
-    let ev = EventInfo { secret: Some(final_name), ..ev };
+    let ev = EventInfo {
+        secret: Some(final_name),
+        ..ev
+    };
     let ev = if detail.is_empty() { ev } else { ev.detail(detail.join(", ")) };
     let mut v = view_for(&app, &p, &updated)?;
     let visible = |n: &String| app.db.secret_get(n).ok().flatten().is_some_and(|o| p.may_use(&o));
@@ -1047,7 +1134,10 @@ async fn rotate_secret(
     match result {
         Ok(r) => {
             let ev = ev.detail(format!("{} rotation: {}", r.mode, r.state));
-            Ok(with_event(Json(json!({ "rotation": r, "secret": view(&app, &load(&app, &name, &EventInfo::new("x", "x"))?)? })), ev))
+            Ok(with_event(
+                Json(json!({ "rotation": r, "secret": view(&app, &load(&app, &name, &EventInfo::new("x", "x"))?)? })),
+                ev,
+            ))
         }
         Err(e) => {
             let msg = truncate(&e.msg, 200);
@@ -1159,22 +1249,32 @@ async fn proxy_request(
     body: Bytes,
 ) -> ApiResult {
     let p = app.authenticate(&headers, &caller)?;
-    let ev = EventInfo::new("proxy", p.label()).secret(&name).detail(truncate(&format!("{method} /{path}"), 200));
+    let ev = EventInfo::new("proxy", p.label())
+        .secret(&name)
+        .detail(truncate(&format!("{method} /{path}"), 200));
     require(&p, Scope::Proxy, &name, &ev)?;
     let get_only = matches!(&p, Principal::Token(t) if t.proxy_get_only);
     if !proxy::allowed_method(&method, get_only) {
-        let msg = if get_only { "this token may only send GET requests through the proxy" } else { "method not allowed" };
+        let msg = if get_only {
+            "this token may only send GET requests through the proxy"
+        } else {
+            "method not allowed"
+        };
         return Err(ApiError::new(StatusCode::METHOD_NOT_ALLOWED, msg).event(ev.detail("method denied")));
     }
     let meta = load(&app, &name, &ev)?;
     require_use(&p, &meta, &ev)?;
-    let target = proxy::target_for(&meta).ok_or_else(|| {
-        ApiError::bad_request("no proxy target for this secret: set a base URL in its settings").event(ev.clone())
-    })?;
+    let target = proxy::target_for(&meta)
+        .ok_or_else(|| ApiError::bad_request("no proxy target for this secret: set a base URL in its settings").event(ev.clone()))?;
     let url = proxy::build_url(&target.base, &path, query.as_deref()).map_err(|e| ApiError::bad_request(e).event(ev.clone()))?;
     let stored = app.reveal(&meta).map_err(|e| e.event(ev.clone()))?;
-    let material = crate::rotate::proxy_material(&app, &meta, &stored).await.map_err(|e| e.event(ev.clone()))?;
-    let creds = proxy::Creds { material: &material, fields: &meta.fields };
+    let material = crate::rotate::proxy_material(&app, &meta, &stored)
+        .await
+        .map_err(|e| e.event(ev.clone()))?;
+    let creds = proxy::Creds {
+        material: &material,
+        fields: &meta.fields,
+    };
     let fwd = proxy::forward_request_headers(&headers, &target.auth);
     let (resp, upstream) = proxy::send(&app.http, &target, &creds, method, url, fwd, body)
         .await
@@ -1243,14 +1343,27 @@ fn token_settings(body: &TokenBody) -> ApiResult<TokenSettings> {
         .filter(|s| !s.is_empty())
         .collect();
     if secrets.is_empty() || !secrets.iter().all(|g| valid_glob(g)) {
-        return Err(ApiError::bad_request("secret patterns may use letters, digits, '_', '-', '.' and '*'"));
+        return Err(ApiError::bad_request(
+            "secret patterns may use letters, digits, '_', '-', '.' and '*'",
+        ));
     }
-    let nodes: Vec<String> =
-        body.nodes.clone().unwrap_or_default().into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let nodes: Vec<String> = body
+        .nodes
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     if !nodes.iter().all(|n| valid_node(n)) {
         return Err(ApiError::bad_request("invalid machine name"));
     }
-    Ok(TokenSettings { name, scopes, secrets, nodes })
+    Ok(TokenSettings {
+        name,
+        scopes,
+        secrets,
+        nodes,
+    })
 }
 
 /// Changes what an existing token may do. It takes effect on the token's next
@@ -1264,7 +1377,12 @@ async fn update_token(
 ) -> ApiResult {
     let p = owner(&app, &headers, &caller)?;
     app.require_fresh(&p)?;
-    let TokenSettings { name, scopes, secrets, nodes } = token_settings(&body)?;
+    let TokenSettings {
+        name,
+        scopes,
+        secrets,
+        nodes,
+    } = token_settings(&body)?;
     let Some(old) = app.db.token_get(id)?.filter(|t| t.revoked_at.is_none()) else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such active token"));
     };
@@ -1277,7 +1395,11 @@ async fn update_token(
             s.join(","),
             g.join(","),
             if n.is_empty() { "any".to_string() } else { n.join(",") },
-            if get_only && s.iter().any(|x| x == "proxy") { " GET-only" } else { "" }
+            if get_only && s.iter().any(|x| x == "proxy") {
+                " GET-only"
+            } else {
+                ""
+            }
         )
     };
     let detail = format!(
@@ -1298,7 +1420,12 @@ async fn create_token(
 ) -> ApiResult {
     let p = owner(&app, &headers, &caller)?;
     app.require_fresh(&p)?;
-    let TokenSettings { name, scopes, secrets, nodes } = token_settings(&body)?;
+    let TokenSettings {
+        name,
+        scopes,
+        secrets,
+        nodes,
+    } = token_settings(&body)?;
     let (token, hash) = auth::new_token();
     let id = app.db.token_create(&name, &hash, &scopes, &secrets, &nodes, body.proxy_get_only)?;
     let ev = EventInfo::new("token.create", "owner (web)").detail(format!("{name} [{}]", scopes.join(",")));
@@ -1324,7 +1451,10 @@ async fn revoke_token(
     if !app.db.token_revoke(id)? {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such active token"));
     }
-    Ok(with_event(Json(json!({ "revoked": id })), EventInfo::new("token.revoke", "owner (web)").detail(format!("token #{id}"))))
+    Ok(with_event(
+        Json(json!({ "revoked": id })),
+        EventInfo::new("token.revoke", "owner (web)").detail(format!("token #{id}")),
+    ))
 }
 
 // ---------------------------------------------------------------- dashboard & audit
@@ -1378,7 +1508,9 @@ async fn events(
 async fn audit_verify(State(app): State<AppRef>, Extension(caller): Extension<Caller>, headers: HeaderMap) -> ApiResult {
     owner(&app, &headers, &caller)?;
     let db = app.db.clone();
-    let r = tokio::task::spawn_blocking(move || db.audit_verify()).await.map_err(ApiError::internal)??;
+    let r = tokio::task::spawn_blocking(move || db.audit_verify())
+        .await
+        .map_err(ApiError::internal)??;
     Ok(Json(r).into_response())
 }
 

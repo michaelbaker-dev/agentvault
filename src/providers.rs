@@ -257,7 +257,10 @@ pub static PROVIDERS: &[Provider] = &[
         rotate_url: Some("https://platform.openai.com/api-keys"),
         steps: NEW_KEY_STEPS,
         api_base: Some("https://api.openai.com"),
-        verify: Some(Verify { url: "https://api.openai.com/v1/models", ..VERIFY }),
+        verify: Some(Verify {
+            url: "https://api.openai.com/v1/models",
+            ..VERIFY
+        }),
         rotate_days: Some(90),
         ..BASE
     },
@@ -271,7 +274,9 @@ pub static PROVIDERS: &[Provider] = &[
         summary: "Signs in as a GitHub App. The vault turns it into installation tokens that expire after an hour, so apps never hold a long-lived GitHub credential.",
         risk: "high",
         risk_reason: "Has whatever repository permissions the App was granted on its installations.",
-        docs_url: Some("https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation"),
+        docs_url: Some(
+            "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation",
+        ),
         rotate_url: Some("https://github.com/settings/apps"),
         steps: &[
             "Open your GitHub App's settings (link below), scroll to Private keys and click Generate a private key.",
@@ -280,8 +285,18 @@ pub static PROVIDERS: &[Provider] = &[
         ],
         api_base: Some("https://api.github.com"),
         needs: &[
-            Need { name: "app_id", label: "App ID", secret: false, hint: "Shown at the top of the App's settings page." },
-            Need { name: "installation_id", label: "Installation ID", secret: false, hint: "The number at the end of the installation's settings URL." },
+            Need {
+                name: "app_id",
+                label: "App ID",
+                secret: false,
+                hint: "Shown at the top of the App's settings page.",
+            },
+            Need {
+                name: "installation_id",
+                label: "Installation ID",
+                secret: false,
+                hint: "The number at the end of the installation's settings URL.",
+            },
         ],
         rotation: Rotation::Minted("github-app"),
         rotate_days: Some(365),
@@ -304,7 +319,11 @@ pub static PROVIDERS: &[Provider] = &[
         api_base: Some("https://api.github.com"),
         verify: Some(Verify {
             url: "https://api.github.com/user",
-            headers: &[("accept", "application/vnd.github+json"), ("x-github-api-version", "2022-11-28"), UA],
+            headers: &[
+                ("accept", "application/vnd.github+json"),
+                ("x-github-api-version", "2022-11-28"),
+                UA,
+            ],
             facts: &[("login", "/login"), ("name", "/name")],
             scope_header: Some("x-oauth-scopes"),
             expiry_header: Some("github-authentication-token-expiration"),
@@ -349,7 +368,11 @@ pub static PROVIDERS: &[Provider] = &[
         api_base: Some("https://api.stripe.com"),
         verify: Some(Verify {
             url: "https://api.stripe.com/v1/account",
-            facts: &[("account_id", "/id"), ("display_name", "/settings/dashboard/display_name"), ("country", "/country")],
+            facts: &[
+                ("account_id", "/id"),
+                ("display_name", "/settings/dashboard/display_name"),
+                ("country", "/country"),
+            ],
             ..VERIFY
         }),
         rotate_days: Some(90),
@@ -388,8 +411,18 @@ pub static PROVIDERS: &[Provider] = &[
         ],
         api_base: Some("https://slack.com/api"),
         needs: &[
-            Need { name: "client_id", label: "Client ID", secret: false, hint: "Basic Information → App Credentials." },
-            Need { name: "client_secret", label: "Client secret", secret: true, hint: "Basic Information → App Credentials." },
+            Need {
+                name: "client_id",
+                label: "Client ID",
+                secret: false,
+                hint: "Basic Information → App Credentials.",
+            },
+            Need {
+                name: "client_secret",
+                label: "Client secret",
+                secret: true,
+                hint: "Basic Information → App Credentials.",
+            },
         ],
         rotation: Rotation::Minted("slack"),
         ..BASE
@@ -436,7 +469,11 @@ pub static PROVIDERS: &[Provider] = &[
         api_base: Some("https://huggingface.co"),
         verify: Some(Verify {
             url: "https://huggingface.co/api/whoami-v2",
-            facts: &[("user", "/name"), ("token_role", "/auth/accessToken/role"), ("token_name", "/auth/accessToken/displayName")],
+            facts: &[
+                ("user", "/name"),
+                ("token_role", "/auth/accessToken/role"),
+                ("token_name", "/auth/accessToken/displayName"),
+            ],
             ..VERIFY
         }),
         rotate_days: Some(180),
@@ -453,7 +490,10 @@ pub static PROVIDERS: &[Provider] = &[
         rotate_url: Some("https://console.groq.com/keys"),
         steps: NEW_KEY_STEPS,
         api_base: Some("https://api.groq.com"),
-        verify: Some(Verify { url: "https://api.groq.com/openai/v1/models", ..VERIFY }),
+        verify: Some(Verify {
+            url: "https://api.groq.com/openai/v1/models",
+            ..VERIFY
+        }),
         ..BASE
     },
     Provider {
@@ -485,7 +525,11 @@ pub static PROVIDERS: &[Provider] = &[
         rotate_url: Some("https://app.sendgrid.com/settings/api_keys"),
         steps: NEW_KEY_STEPS,
         api_base: Some("https://api.sendgrid.com"),
-        verify: Some(Verify { url: "https://api.sendgrid.com/v3/scopes", facts: &[("scopes", "/scopes")], ..VERIFY }),
+        verify: Some(Verify {
+            url: "https://api.sendgrid.com/v3/scopes",
+            facts: &[("scopes", "/scopes")],
+            ..VERIFY
+        }),
         ..BASE
     },
     Provider {
@@ -517,7 +561,11 @@ pub static PROVIDERS: &[Provider] = &[
         rotate_url: Some("https://www.npmjs.com/settings/~/tokens"),
         steps: NEW_KEY_STEPS,
         api_base: Some("https://registry.npmjs.org"),
-        verify: Some(Verify { url: "https://registry.npmjs.org/-/whoami", facts: &[("username", "/username")], ..VERIFY }),
+        verify: Some(Verify {
+            url: "https://registry.npmjs.org/-/whoami",
+            facts: &[("username", "/username")],
+            ..VERIFY
+        }),
         ..BASE
     },
     Provider {
@@ -553,7 +601,12 @@ pub static PROVIDERS: &[Provider] = &[
             "Revoke the old client on the same page.",
         ],
         api_base: Some("https://api.tailscale.com"),
-        needs: &[Need { name: "client_id", label: "Client ID", secret: false, hint: "Shown when you create the OAuth client." }],
+        needs: &[Need {
+            name: "client_id",
+            label: "Client ID",
+            secret: false,
+            hint: "Shown when you create the OAuth client.",
+        }],
         rotation: Rotation::Minted("tailscale"),
         rotate_days: Some(365),
         ..BASE
@@ -662,7 +715,12 @@ pub static PROVIDERS: &[Provider] = &[
             "Paste the new secret here and update the app that uses it.",
             "Once the app works with the new secret, disable and delete the old one there.",
         ],
-        needs: &[Need { name: "client_id", label: "Client ID", secret: false, hint: "Ends in .apps.googleusercontent.com." }],
+        needs: &[Need {
+            name: "client_id",
+            label: "Client ID",
+            secret: false,
+            hint: "Ends in .apps.googleusercontent.com.",
+        }],
         rotate_days: Some(180),
         ..BASE
     },
@@ -681,8 +739,18 @@ pub static PROVIDERS: &[Provider] = &[
             "Delete the old secret on the same page once the app works.",
         ],
         needs: &[
-            Need { name: "tenant_id", label: "Tenant (directory) ID", secret: false, hint: "App registration → Overview." },
-            Need { name: "client_id", label: "Application (client) ID", secret: false, hint: "App registration → Overview." },
+            Need {
+                name: "tenant_id",
+                label: "Tenant (directory) ID",
+                secret: false,
+                hint: "App registration → Overview.",
+            },
+            Need {
+                name: "client_id",
+                label: "Application (client) ID",
+                secret: false,
+                hint: "App registration → Overview.",
+            },
         ],
         rotation: Rotation::Auto("azure-app-secret"),
         rotate_days: Some(180),
@@ -738,12 +806,26 @@ pub static PROVIDERS: &[Provider] = &[
         verify: Some(Verify {
             url: "/rest/api/3/myself",
             auth: "basic:email",
-            facts: &[("account", "/displayName"), ("email", "/emailAddress"), ("account_id", "/accountId")],
+            facts: &[
+                ("account", "/displayName"),
+                ("email", "/emailAddress"),
+                ("account_id", "/accountId"),
+            ],
             ..VERIFY
         }),
         needs: &[
-            Need { name: "email", label: "Atlassian account email", secret: false, hint: "The email you sign in to Atlassian with." },
-            Need { name: "base_url", label: "Site URL", secret: false, hint: "e.g. https://yourteam.atlassian.net" },
+            Need {
+                name: "email",
+                label: "Atlassian account email",
+                secret: false,
+                hint: "The email you sign in to Atlassian with.",
+            },
+            Need {
+                name: "base_url",
+                label: "Site URL",
+                secret: false,
+                hint: "e.g. https://yourteam.atlassian.net",
+            },
         ],
         rotate_days: Some(180),
         ..BASE
@@ -786,7 +868,11 @@ pub static PROVIDERS: &[Provider] = &[
         api_base: Some("https://api.tavily.com"),
         verify: Some(Verify {
             url: "https://api.tavily.com/usage",
-            facts: &[("key_usage", "/key/usage"), ("key_limit", "/key/limit"), ("plan", "/account/current_plan")],
+            facts: &[
+                ("key_usage", "/key/usage"),
+                ("key_limit", "/key/limit"),
+                ("plan", "/account/current_plan"),
+            ],
             ..VERIFY
         }),
         rotate_days: Some(365),
@@ -795,7 +881,10 @@ pub static PROVIDERS: &[Provider] = &[
     Provider {
         id: "n8n",
         name: "n8n API key",
-        weak: &[r"^eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*$", r"^n8n_api_[A-Za-z0-9]{20,}$"],
+        weak: &[
+            r"^eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*$",
+            r"^n8n_api_[A-Za-z0-9]{20,}$",
+        ],
         hints: &["n8n"],
         overrides: &["jwt"],
         summary: "Manages workflows, executions and credentials on your n8n server through its public API.",
@@ -809,8 +898,17 @@ pub static PROVIDERS: &[Provider] = &[
             "Delete the old key on the same page.",
         ],
         api_auth: "header:x-n8n-api-key",
-        verify: Some(Verify { url: "/api/v1/workflows?limit=1", auth: "header:x-n8n-api-key", ..VERIFY }),
-        needs: &[Need { name: "base_url", label: "n8n address", secret: false, hint: "e.g. https://n8n.example.com" }],
+        verify: Some(Verify {
+            url: "/api/v1/workflows?limit=1",
+            auth: "header:x-n8n-api-key",
+            ..VERIFY
+        }),
+        needs: &[Need {
+            name: "base_url",
+            label: "n8n address",
+            secret: false,
+            hint: "e.g. https://n8n.example.com",
+        }],
         rotate_days: Some(180),
         ..BASE
     },
@@ -827,7 +925,11 @@ pub static PROVIDERS: &[Provider] = &[
         steps: NEW_KEY_STEPS,
         api_base: Some("https://api.ui.com"),
         api_auth: "header:x-api-key",
-        verify: Some(Verify { url: "https://api.ui.com/v1/hosts?pageSize=1", auth: "header:x-api-key", ..VERIFY }),
+        verify: Some(Verify {
+            url: "https://api.ui.com/v1/hosts?pageSize=1",
+            auth: "header:x-api-key",
+            ..VERIFY
+        }),
         rotate_days: Some(365),
         ..BASE
     },
@@ -853,7 +955,12 @@ pub static PROVIDERS: &[Provider] = &[
             facts: &[("account", "/account_number"), ("status", "/status"), ("currency", "/currency")],
             ..VERIFY
         }),
-        needs: &[Need { name: "key_id", label: "Key ID", secret: false, hint: "Starts with AK for live accounts." }],
+        needs: &[Need {
+            name: "key_id",
+            label: "Key ID",
+            secret: false,
+            hint: "Starts with AK for live accounts.",
+        }],
         rotate_days: Some(90),
         ..BASE
     },
@@ -879,7 +986,12 @@ pub static PROVIDERS: &[Provider] = &[
             facts: &[("account", "/account_number"), ("status", "/status")],
             ..VERIFY
         }),
-        needs: &[Need { name: "key_id", label: "Key ID", secret: false, hint: "Starts with PK for paper accounts." }],
+        needs: &[Need {
+            name: "key_id",
+            label: "Key ID",
+            secret: false,
+            hint: "Starts with PK for paper accounts.",
+        }],
         ..BASE
     },
     Provider {
@@ -936,7 +1048,11 @@ pub static PROVIDERS: &[Provider] = &[
         verify: Some(Verify {
             url: "https://api.twelvedata.com/api_usage",
             auth: "headers:Authorization=apikey {value}",
-            facts: &[("plan", "/plan_category"), ("usage", "/current_usage"), ("plan_limit", "/plan_limit")],
+            facts: &[
+                ("plan", "/plan_category"),
+                ("usage", "/current_usage"),
+                ("plan_limit", "/plan_limit"),
+            ],
             ..VERIFY
         }),
         ..BASE
@@ -1015,8 +1131,18 @@ pub static PROVIDERS: &[Provider] = &[
             "Once your server works with it, revoke the old key there.",
         ],
         needs: &[
-            Need { name: "key_id", label: "Key ID", secret: false, hint: "10 characters, shown next to the key." },
-            Need { name: "team_id", label: "Team ID", secret: false, hint: "Top right of the developer portal." },
+            Need {
+                name: "key_id",
+                label: "Key ID",
+                secret: false,
+                hint: "10 characters, shown next to the key.",
+            },
+            Need {
+                name: "team_id",
+                label: "Team ID",
+                secret: false,
+                hint: "Top right of the developer portal.",
+            },
         ],
         rotate_days: Some(365),
         ..BASE
@@ -1228,8 +1354,14 @@ mod tests {
         assert_eq!(id(&format!("AKIA{}", "Q".repeat(16))), Some("aws"));
         assert_eq!(id(&pem("OPENSSH")), Some("private-key"));
         assert_eq!(id("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig"), Some("jwt"));
-        assert_eq!(id(&format!("tskey-auth-k{}-{}", "a".repeat(10), "b".repeat(30))), Some("tailscale-authkey"));
-        assert_eq!(id(&format!("tskey-client-k{}-{}", "a".repeat(10), "b".repeat(30))), Some("tailscale-oauth"));
+        assert_eq!(
+            id(&format!("tskey-auth-k{}-{}", "a".repeat(10), "b".repeat(30))),
+            Some("tailscale-authkey")
+        );
+        assert_eq!(
+            id(&format!("tskey-client-k{}-{}", "a".repeat(10), "b".repeat(30))),
+            Some("tailscale-oauth")
+        );
         assert_eq!(id(&format!("ATATT3x{}", "F".repeat(180))), Some("atlassian"));
         assert_eq!(id(&format!("sk_{}", "a1".repeat(24))), Some("elevenlabs"));
         assert_eq!(id(&format!("tvly-dev-{}", "Z".repeat(30))), Some("tavily"));
@@ -1237,7 +1369,10 @@ mod tests {
         assert_eq!(id(&format!("abc8Q~{}", "y".repeat(34))), Some("azure-app-secret"));
         assert_eq!(id(&format!("0x{}", "ab".repeat(32))), Some("crypto-wallet"));
         assert_eq!(id(&format!("xoxe-1-{}", "M".repeat(40))), Some("slack-refresh"));
-        assert_eq!(id(&serde_json::json!({ "type": (["service", "account"].join("_")), "project_id": "p" }).to_string()), Some("google-service-account"));
+        assert_eq!(
+            id(&serde_json::json!({ "type": (["service", "account"].join("_")), "project_id": "p" }).to_string()),
+            Some("google-service-account")
+        );
         assert_eq!(id("just some password"), None);
     }
 
@@ -1255,10 +1390,22 @@ mod tests {
         assert_eq!(idl("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "session"), Some("jwt"));
         assert_eq!(idl("hunter2 is weak", "hostinger vps login"), Some("hostinger"));
         assert_eq!(idl("hunter2 is weak", "Bank login"), Some("password"));
-        assert_eq!(id(&format!("cfut_{}", "A".repeat(44))), Some("cloudflare"), "new Cloudflare tokens need no hint");
-        assert_eq!(idl(&format!("ghp_{}", "A".repeat(36)), "my account token"), Some("github"), "a real format beats the password hint");
+        assert_eq!(
+            id(&format!("cfut_{}", "A".repeat(44))),
+            Some("cloudflare"),
+            "new Cloudflare tokens need no hint"
+        );
+        assert_eq!(
+            idl(&format!("ghp_{}", "A".repeat(36)), "my account token"),
+            Some("github"),
+            "a real format beats the password hint"
+        );
         let aiza = format!("AIza{}", "x".repeat(35));
-        assert_eq!(idl(&aiza, "for the magic jira n8n stitch thing"), Some("google"), "notes can't move a key to another provider");
+        assert_eq!(
+            idl(&aiza, "for the magic jira n8n stitch thing"),
+            Some("google"),
+            "notes can't move a key to another provider"
+        );
         let ts = format!("tskey-auth-k{}-{}", "a".repeat(10), "b".repeat(30));
         assert_eq!(idl(&ts, "jira"), Some("tailscale-authkey"));
         assert_eq!(idl(&pem("").replace("BEGIN  ", "BEGIN "), "Apple APNS key"), Some("apns"));
@@ -1277,7 +1424,11 @@ mod tests {
             assert!(!p.summary.is_empty() && !p.risk_reason.is_empty(), "{}", p.id);
             assert!(["low", "medium", "high"].contains(&p.risk), "{}", p.id);
             assert!(["api_key", "password", "private_key", "other"].contains(&p.kind), "{}", p.id);
-            assert!(p.weak.is_empty() || !p.hints.is_empty(), "{} has hint-only formats but no hints", p.id);
+            assert!(
+                p.weak.is_empty() || !p.hints.is_empty(),
+                "{} has hint-only formats but no hints",
+                p.id
+            );
             for o in p.overrides {
                 assert!(by_id(o).is_some(), "{}: unknown override {o}", p.id);
             }
@@ -1286,7 +1437,11 @@ mod tests {
                 assert!(crate::proxy::Auth::parse(v.auth).is_some(), "{}", p.id);
                 assert!(v.url.starts_with("https://") || v.url.starts_with('/'), "{}", p.id);
                 if v.url.starts_with('/') {
-                    assert!(p.needs.iter().any(|n| n.name == "base_url"), "{}: relative verify URL needs a base_url", p.id);
+                    assert!(
+                        p.needs.iter().any(|n| n.name == "base_url"),
+                        "{}: relative verify URL needs a base_url",
+                        p.id
+                    );
                 }
             }
             for u in [p.docs_url, p.rotate_url, p.api_base].into_iter().flatten() {
@@ -1296,7 +1451,12 @@ mod tests {
                 assert!(!p.steps.is_empty(), "{} has guided rotation but no steps", p.id);
             }
             for n in p.needs {
-                assert!(n.name == "base_url" || crate::material::valid_part_name(n.name), "{}: {}", p.id, n.name);
+                assert!(
+                    n.name == "base_url" || crate::material::valid_part_name(n.name),
+                    "{}: {}",
+                    p.id,
+                    n.name
+                );
             }
             if let Some(pp) = p.parent_provider {
                 assert!(by_id(pp).is_some(), "{}: unknown parent provider {pp}", p.id);

@@ -1,0 +1,54 @@
+name: Release
+
+# Push a tag like v0.1.0 to build Linux downloads and attach them to a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 22.04 keeps the glibc requirement low (2.35), so the binary
+          # runs on Debian 12, Ubuntu 22.04+ and similar.
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          # A fixed name, so .../releases/latest/download/keys-<arch>-linux.tar.gz always works.
+          name="keys-${{ matrix.arch }}-linux"
+          mkdir -p "dist/$name"
+          cp target/release/keys deploy/* README.md LICENSE-MIT LICENSE-APACHE config.example.toml "dist/$name/"
+          cp -r skill "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keys-${{ matrix.arch }}
+          path: dist/*.tar.gz*
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

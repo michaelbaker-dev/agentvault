@@ -129,7 +129,6 @@ fn harden_process() {
     }
 }
 
-
 async fn tailscale_cert(cfg: &Config) {
     let out = tokio::process::Command::new("tailscale")
         .arg("cert")
@@ -191,7 +190,11 @@ async fn serve(cfg: Config) -> Result<(), String> {
     if let Some(pass) = cfg.unlock_passphrase() {
         let a = app.clone();
         let res = tokio::task::spawn_blocking(move || {
-            if Vault::is_initialized(&a.db)? { a.vault.unlock(&a.db, &pass).map(|_| true) } else { Ok(false) }
+            if Vault::is_initialized(&a.db)? {
+                a.vault.unlock(&a.db, &pass).map(|_| true)
+            } else {
+                Ok(false)
+            }
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -206,7 +209,9 @@ async fn serve(cfg: Config) -> Result<(), String> {
             }
             Err(e) => {
                 app.auto_unlock.set(AutoUnlock::FAILED);
-                tracing::warn!("automatic unlock failed: {e}. Sign in to unlock, then run `sudo /usr/local/lib/keys/auto-unlock` to store the current passphrase");
+                tracing::warn!(
+                    "automatic unlock failed: {e}. Sign in to unlock, then run `sudo /usr/local/lib/keys/auto-unlock` to store the current passphrase"
+                );
             }
         }
     }

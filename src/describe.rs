@@ -57,10 +57,16 @@ pub async fn run(app: AppRef, id: i64, version: i64, verify: bool) {
     {
         match verify_url(p, v, &meta).map(|u| app.endpoints.rewrite(u)) {
             Some(url) => {
-                let creds = Creds { material: &material, fields: &meta.fields };
+                let creds = Creds {
+                    material: &material,
+                    fields: &meta.fields,
+                };
                 let out = verify_with_provider(&app.http, v, url, &creds).await;
                 app.record_internal(
-                    EventInfo::new("verify", ACTOR).secret(&meta.name).upstream(out.elapsed).detail(p.id),
+                    EventInfo::new("verify", ACTOR)
+                        .secret(&meta.name)
+                        .upstream(out.elapsed)
+                        .detail(p.id),
                     out.status,
                     out.elapsed,
                 );
@@ -154,7 +160,8 @@ fn template(p: Option<&Provider>, facts: &Value, why: &str) -> Description {
     let status = format!("template ({why})");
     let Some(p) = p else {
         return Description {
-            description: "Unrecognized credential format. Add notes saying what it's for, where it came from and what it can access.".into(),
+            description: "Unrecognized credential format. Add notes saying what it's for, where it came from and what it can access."
+                .into(),
             provider_name: Some("Unknown".into()),
             risk: Some("medium".into()),
             risk_reason: Some("Unknown credentials are treated as medium risk until you say otherwise.".into()),
@@ -170,7 +177,11 @@ fn template(p: Option<&Provider>, facts: &Value, why: &str) -> Description {
                 let who: Vec<String> = v
                     .get("account")
                     .and_then(Value::as_object)
-                    .map(|m| m.iter().map(|(k, v)| format!("{k}: {}", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))).collect())
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, v)| format!("{k}: {}", v.as_str().map(String::from).unwrap_or_else(|| v.to_string())))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 text.push_str(" Verified working with the provider");
                 if !who.is_empty() {
@@ -183,7 +194,9 @@ fn template(p: Option<&Provider>, facts: &Value, why: &str) -> Description {
                 }
             }
             Some("rejected") => text.push_str(" The provider rejected this key: it may be revoked or mistyped."),
-            Some("restricted") => text.push_str(" The provider accepted this key; it has limited permissions, so it can't read its own account details."),
+            Some("restricted") => {
+                text.push_str(" The provider accepted this key; it has limited permissions, so it can't read its own account details.")
+            }
             _ => {}
         }
     }
@@ -201,7 +214,11 @@ fn template(p: Option<&Provider>, facts: &Value, why: &str) -> Description {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n).collect::<String>()) }
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    }
 }
 
 pub struct Verified {
@@ -220,7 +237,13 @@ impl Verified {
 
 /// Calls the provider and keeps only the fields named in the provider table.
 pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::Url, creds: &Creds<'_>) -> Verified {
-    let fail = |result: Value, status: u16, elapsed: Duration| Verified { result, status, elapsed, expires_at: None, provider_ref: None };
+    let fail = |result: Value, status: u16, elapsed: Duration| Verified {
+        result,
+        status,
+        elapsed,
+        expires_at: None,
+        provider_ref: None,
+    };
     let Some(auth) = Auth::parse(v.auth) else {
         return fail(json!({"status": "error", "error": "bad auth spec"}), 500, Duration::ZERO);
     };
@@ -231,7 +254,13 @@ pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::
     }
     let rb = match auth.apply(rb, creds) {
         Ok(rb) => rb,
-        Err(e) => return fail(json!({"status": "incomplete", "error": e, "checked_at": now_ms()}), 400, Duration::ZERO),
+        Err(e) => {
+            return fail(
+                json!({"status": "incomplete", "error": e, "checked_at": now_ms()}),
+                400,
+                Duration::ZERO,
+            );
+        }
     };
     let start = Instant::now();
     let resp = match rb.send().await {
@@ -240,19 +269,36 @@ pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::
     };
     let elapsed = start.elapsed();
     let code = resp.status().as_u16();
-    let header = |h: Option<&str>| h.and_then(|h| resp.headers().get(h)).and_then(|h| h.to_str().ok()).map(String::from);
-    let scopes: Option<Vec<String>> = header(v.scope_header)
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect());
+    let header = |h: Option<&str>| {
+        h.and_then(|h| resp.headers().get(h))
+            .and_then(|h| h.to_str().ok())
+            .map(String::from)
+    };
+    let scopes: Option<Vec<String>> =
+        header(v.scope_header).map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect());
     let mut expires_at = header(v.expiry_header).as_deref().and_then(parse_time);
     let body: Value = resp.json().await.unwrap_or(Value::Null);
     // Why a key was refused, with the key itself blanked out.
-    let reason = ["/detail/message", "/detail/status", "/detail", "/error/message", "/error_description", "/error", "/message", "/errors/0/message", "/msg"]
-        .iter()
-        .find_map(|p| body.pointer(p).and_then(Value::as_str))
-        .map(|m| {
-            let r = crate::proxy::Redactor::for_creds(creds, &auth);
-            String::from_utf8_lossy(&r.redact(m.as_bytes())).chars().take(160).collect::<String>()
-        });
+    let reason = [
+        "/detail/message",
+        "/detail/status",
+        "/detail",
+        "/error/message",
+        "/error_description",
+        "/error",
+        "/message",
+        "/errors/0/message",
+        "/msg",
+    ]
+    .iter()
+    .find_map(|p| body.pointer(p).and_then(Value::as_str))
+    .map(|m| {
+        let r = crate::proxy::Redactor::for_creds(creds, &auth);
+        String::from_utf8_lossy(&r.redact(m.as_bytes()))
+            .chars()
+            .take(160)
+            .collect::<String>()
+    });
     let mut status = match code {
         200..=299 => "valid",
         401 | 403 => "rejected",
@@ -307,31 +353,51 @@ pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::
     {
         out["reason"] = json!(r);
     }
-    Verified { result: out, status: code, elapsed, expires_at, provider_ref }
+    Verified {
+        result: out,
+        status: code,
+        elapsed,
+        expires_at,
+        provider_ref,
+    }
 }
 
 /// Whether a provider's refusal just means the key can't read its own
 /// account details (a deliberately restricted key), not that it's bad.
 fn only_lacks_permission(reason: &str) -> bool {
     let r = reason.to_lowercase();
-    ["missing the permission", "missing_permissions", "missing permission", "insufficient scope", "insufficient_scope", "not have the required scope"]
-        .iter()
-        .any(|p| r.contains(p))
+    [
+        "missing the permission",
+        "missing_permissions",
+        "missing permission",
+        "insufficient scope",
+        "insufficient_scope",
+        "not have the required scope",
+    ]
+    .iter()
+    .any(|p| r.contains(p))
 }
 
 /// Decodes (without verifying) a JWT's payload for issuer/subject/expiry.
 /// Returns the expiry in milliseconds, if it has one.
 fn jwt_claims(token: &str, facts: &mut Map<String, Value>) -> Option<i64> {
     let payload = token.trim().split('.').nth(1)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
-    let Ok(Value::Object(claims)) = serde_json::from_slice::<Value>(&bytes) else { return None };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    let Ok(Value::Object(claims)) = serde_json::from_slice::<Value>(&bytes) else {
+        return None;
+    };
     let mut keep = Map::new();
     for k in ["iss", "aud", "exp", "iat", "scope"] {
         if let Some(v) = claims.get(k) {
-            keep.insert(k.into(), match v {
-                Value::String(s) => Value::String(truncate(s, 200)),
-                other => other.clone(),
-            });
+            keep.insert(
+                k.into(),
+                match v {
+                    Value::String(s) => Value::String(truncate(s, 200)),
+                    other => other.clone(),
+                },
+            );
         }
     }
     facts.insert("jwt_claims".into(), Value::Object(keep));
@@ -458,7 +524,9 @@ mod tests {
 
     #[test]
     fn permission_refusals_are_not_bad_keys() {
-        assert!(only_lacks_permission("The API key you used is missing the permission user_read to execute this operation."));
+        assert!(only_lacks_permission(
+            "The API key you used is missing the permission user_read to execute this operation."
+        ));
         assert!(only_lacks_permission("insufficient_scope"));
         assert!(!only_lacks_permission("unauthorized"));
         assert!(!only_lacks_permission("Invalid API Token"));

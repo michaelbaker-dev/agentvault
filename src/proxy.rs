@@ -42,7 +42,9 @@ pub struct Creds<'a> {
 
 impl Creds<'_> {
     pub fn lookup(&self, name: &str) -> Option<&str> {
-        self.material.get(name).or_else(|| self.fields.get(name).and_then(serde_json::Value::as_str))
+        self.material
+            .get(name)
+            .or_else(|| self.fields.get(name).and_then(serde_json::Value::as_str))
     }
 }
 
@@ -175,8 +177,15 @@ pub fn validate_base_url(s: &str) -> Result<Url, String> {
 pub fn target_for(meta: &SecretMeta) -> Option<Target> {
     let provider = meta.provider.as_deref().and_then(providers::by_id);
     let base = meta.proxy_base_url.as_deref().or_else(|| provider.and_then(|p| p.api_base))?;
-    let auth = meta.proxy_auth.as_deref().or_else(|| provider.map(|p| p.api_auth)).unwrap_or("bearer");
-    Some(Target { base: validate_base_url(base).ok()?, auth: Auth::parse(auth)? })
+    let auth = meta
+        .proxy_auth
+        .as_deref()
+        .or_else(|| provider.map(|p| p.api_auth))
+        .unwrap_or("bearer");
+    Some(Target {
+        base: validate_base_url(base).ok()?,
+        auth: Auth::parse(auth)?,
+    })
 }
 
 fn percent_decode_lossy(s: &str) -> String {
@@ -298,7 +307,10 @@ pub async fn send(
     }
     rb = target.auth.apply(rb, creds)?;
     let start = Instant::now();
-    let resp = rb.send().await.map_err(|e| format!("upstream request failed: {}", without_url(&e)))?;
+    let resp = rb
+        .send()
+        .await
+        .map_err(|e| format!("upstream request failed: {}", without_url(&e)))?;
     Ok((resp, start.elapsed()))
 }
 
@@ -361,7 +373,9 @@ impl Redactor {
                 b64.encode(secret).into_bytes(),
                 b64.encode(format!("{secret}:")).into_bytes(),
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret).into_bytes(),
-                percent_encoding::utf8_percent_encode(secret, percent_encoding::NON_ALPHANUMERIC).to_string().into_bytes(),
+                percent_encoding::utf8_percent_encode(secret, percent_encoding::NON_ALPHANUMERIC)
+                    .to_string()
+                    .into_bytes(),
             ]);
         }
         forms.retain(|f| f.len() >= 8);
@@ -485,11 +499,16 @@ mod tests {
         let mut m = Material::single("SECRET");
         m.set_extra("client_secret", "CS".into());
         let fields = serde_json::json!({ "key_id": "PKID", "email": "me@x" });
-        let c = Creds { material: &m, fields: &fields };
+        let c = Creds {
+            material: &m,
+            fields: &fields,
+        };
         assert_eq!(render("{key_id}", &c).unwrap(), "PKID");
         assert_eq!(render("Token {value}/{client_secret}", &c).unwrap(), "Token SECRET/CS");
         assert!(render("{missing}", &c).is_err());
-        let rb = Auth::BasicWith("email".into()).apply(reqwest::Client::new().get("https://x.example"), &c).unwrap();
+        let rb = Auth::BasicWith("email".into())
+            .apply(reqwest::Client::new().get("https://x.example"), &c)
+            .unwrap();
         let req = rb.build().unwrap();
         let expect = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode("me@x:SECRET"));
         assert_eq!(req.headers()["authorization"], expect.as_str());
@@ -498,8 +517,21 @@ mod tests {
     #[test]
     fn url_building_stays_on_target() {
         let base = Url::parse("https://api.example.com/v4").unwrap();
-        assert_eq!(build_url(&base, "/projects/1", Some("a=b")).unwrap().as_str(), "https://api.example.com/v4/projects/1?a=b");
-        for bad in ["../admin", "a/../../x", "%2e%2e/x", "a//b", "a\\b", "@evil.com/x", "a#frag", "a?x=1", "a/%2E/b"] {
+        assert_eq!(
+            build_url(&base, "/projects/1", Some("a=b")).unwrap().as_str(),
+            "https://api.example.com/v4/projects/1?a=b"
+        );
+        for bad in [
+            "../admin",
+            "a/../../x",
+            "%2e%2e/x",
+            "a//b",
+            "a\\b",
+            "@evil.com/x",
+            "a#frag",
+            "a?x=1",
+            "a/%2E/b",
+        ] {
             let r = build_url(&base, bad, None);
             if let Ok(u) = &r {
                 assert_eq!(u.host_str(), Some("api.example.com"), "{bad}");
@@ -538,7 +570,10 @@ mod tests {
         assert!(out.get("content-type").is_some());
         assert!(out.get("anthropic-version").is_some());
         let two = Auth::parse("headers:APCA-API-KEY-ID={key_id};APCA-API-SECRET-KEY={value}").unwrap();
-        assert!(forward_request_headers(&h, &two).get("apca-api-key-id").is_none(), "callers can't supply auth headers");
+        assert!(
+            forward_request_headers(&h, &two).get("apca-api-key-id").is_none(),
+            "callers can't supply auth headers"
+        );
     }
 
     #[test]
@@ -558,8 +593,7 @@ mod tests {
         let r = Arc::new(Redactor::new(&[secret]));
         let body = format!("start {secret} middle {secret} end");
         // Split at every possible position into 3-byte chunks.
-        let chunks: Vec<reqwest::Result<Bytes>> =
-            body.as_bytes().chunks(3).map(|c| Ok(Bytes::copy_from_slice(c))).collect();
+        let chunks: Vec<reqwest::Result<Bytes>> = body.as_bytes().chunks(3).map(|c| Ok(Bytes::copy_from_slice(c))).collect();
         let out: Vec<u8> = redact_stream(futures_util::stream::iter(chunks), r)
             .map(|c| c.unwrap().to_vec())
             .collect::<Vec<_>>()

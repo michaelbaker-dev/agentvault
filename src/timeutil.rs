@@ -13,7 +13,9 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 fn num(s: &str) -> Option<i64> {
-    (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten()
+    (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| s.parse().ok())
+        .flatten()
 }
 
 /// Inverse of [`days_from_civil`].
