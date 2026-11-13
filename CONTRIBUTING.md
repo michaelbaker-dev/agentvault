@@ -53,4 +53,4 @@ Then add a recognition test. For an automatic rotator, add a fake of the provide
 
 - Keep each pull request to one change, with tests.
 - Update the README and `CHANGELOG.md` when behaviour changes.
-- By contributing you agree that your work is dual-licensed under MIT and Apache-2.0, like the rest of the project.
+- By contributing you agree that your work is licensed under the MIT License, like the rest of the project.

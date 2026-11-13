@@ -306,4 +306,4 @@ CI runs all of these on every push. Pushing a tag such as `v0.1.0` builds the re
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT), at your option. Unless you state otherwise, any contribution you submit for inclusion is dual-licensed the same way, without additional terms or conditions.
+[MIT](LICENSE). Contributions are accepted under the same license.
