@@ -9,6 +9,8 @@ use std::sync::LazyLock;
 use crate::material::Material;
 use crate::providers::{self, Provider};
 
+/// Keys in one import; more is almost certainly not a notes file.
+pub const MAX_CANDIDATES: usize = 500;
 pub const MAX_TEXT: usize = 1024 * 1024;
 pub const MAX_ITEMS: usize = 500;
 
@@ -133,45 +135,89 @@ fn is_heading(s: &str) -> bool {
 
 /// Masks anything secret-looking, for showing a line back to the owner:
 /// whatever follows "password:", "key -" and the like, and long tokens.
-pub fn mask_line(line: &str) -> String {
+/// Words after which the rest of a label is treated as the credential itself.
+const CREDENTIAL_WORDS: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "pw",
+    "pword",
+    "pass",
+    "passphrase",
+    "passcode",
+    "secret",
+    "token",
+    "key",
+    "keu",
+    "apikey",
+    "login",
+    "pin",
+    "cvv",
+    "cvc",
+    "otp",
+];
+/// Short words that can follow a credential word without being its value.
+const CONNECTORS: &[&str] = &[
+    "is", "for", "the", "a", "an", "to", "of", "my", "on", "at", "in", "-", ":", "=", "id",
+];
+
+/// Splits a label into (token, hidden, is_credential_word). A token is hidden
+/// when it looks like a secret value: long and random, mixed letters with
+/// digits or symbols, `user:password`, or anything after a word such as
+/// "password", "pass" or "pin" (except short connectors). Hidden tokens never
+/// reach notes, names or previews.
+fn classify(line: &str) -> Vec<(String, bool, bool)> {
     let line = LABELLED_VALUE.replace(line, "$1$2$3‹hidden›");
     let mut after_credential_word = false;
     line.split_whitespace()
         .map(|w| {
-            let t = trim_token(w);
+            let t = trim_token(w).trim_end_matches([':', '=', '.', '!', '?']);
             let lower = t.to_ascii_lowercase();
             let digits = t.chars().filter(char::is_ascii_digit).count();
             let letters = t.chars().filter(char::is_ascii_alphabetic).count();
-            let hide = t.len() >= 8 && (secretish(t) || digits >= 3 || digits >= 2 && letters >= 2)
-                // Anything long after "password", "token"... may be the value itself.
-                || after_credential_word && t.len() >= 6 && t != "‹hidden›"
-                || t.chars().any(|c| !c.is_ascii_alphanumeric() && !"-_.,:;'()&/?!‹›".contains(c)) && t.len() >= 6;
-            if [
-                "password",
-                "passwd",
-                "pwd",
-                "passphrase",
-                "passcode",
-                "secret",
-                "token",
-                "key",
-                "keu",
-                "apikey",
-                "login",
-                "pin",
-            ]
-            .contains(&lower.as_str())
-            {
+            let symbols = t.chars().filter(|c| !c.is_ascii_alphanumeric() && !"-_.‹›".contains(*c)).count();
+            let user_pass = t.len() >= 3
+                && !t.contains("://")
+                && t.split_once(':')
+                    .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.chars().all(|c| c.is_ascii_digit()));
+            let is_cred = CREDENTIAL_WORDS.contains(&lower.as_str());
+            let hide = !t.contains('‹')
+                && !t.is_empty()
+                && !is_cred
+                && (t.len() >= 8 && (secretish(t) || digits >= 3 || digits >= 2 && letters >= 2)
+                    || t.len() >= 6 && letters > 0 && (digits > 0 || symbols > 0)
+                    || symbols > 0 && t.len() >= 4
+                    || user_pass
+                    || after_credential_word && !CONNECTORS.contains(&lower.as_str()));
+            if is_cred {
                 after_credential_word = true;
             }
-            if hide && !t.contains('‹') {
-                format!("‹{} chars›", t.len())
-            } else {
-                w.to_string()
-            }
+            (w.to_string(), hide, is_cred)
         })
+        .collect()
+}
+
+pub fn mask_line(line: &str) -> String {
+    classify(line)
+        .into_iter()
+        .map(|(w, hide, _)| if hide { format!("‹{} chars›", trim_token(&w).len()) } else { w })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The words of a label that are safe to build a name from: nothing hidden,
+/// and nothing after the first credential word.
+fn safe_label(label: &str) -> String {
+    let mut out = vec![];
+    for (w, hide, cred) in classify(label) {
+        if !hide && !w.contains('‹') {
+            out.push(w);
+        }
+        if cred {
+            break;
+        }
+    }
+    out.join(" ")
 }
 
 pub fn parse(text: &str) -> Parsed {
@@ -643,7 +689,7 @@ pub fn suggest_name(c: &Candidate, p: Option<&Provider>) -> String {
     if p.is_some_and(|p| p.id == "hostinger") {
         return base.to_string();
     }
-    let qualifier: Vec<String> = words(&c.label)
+    let qualifier: Vec<String> = words(&safe_label(&c.label))
         .into_iter()
         .filter(|w| !STOP.contains(&w.as_str()))
         // A word with digits in a label may be part of a value.

@@ -1171,7 +1171,7 @@ fn swap_in(
         app.db
             .rotation_update(rot, "manual_revoke", Some(version), None, None, Some(msg), false)?;
     }
-    tokio::spawn(describe::run(app.clone(), meta.id, version, true));
+    tokio::spawn(describe::run(app.clone(), meta.id, version, true, false));
     row(app, rot)
 }
 
@@ -1490,7 +1490,7 @@ pub async fn rollback(app: &AppRef, id: i64) -> ApiResult<RotationRow> {
     }
     let _ = app.db.version_delete(meta.id, new_v);
     app.db.rotation_update(r.id, "rolled_back", None, None, None, Some(&msg), true)?;
-    tokio::spawn(describe::run(app.clone(), meta.id, old_v, true));
+    tokio::spawn(describe::run(app.clone(), meta.id, old_v, true, false));
     row(app, id)
 }
 

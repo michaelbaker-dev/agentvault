@@ -153,17 +153,26 @@ pub fn token_hash(token: &str) -> [u8; 32] {
 }
 
 /// Checks a token row against the calling device. Returns None if the token
-/// is pinned to other machines.
-pub fn grant_for(row: &TokenRow, caller: &Caller) -> Option<TokenGrant> {
-    if !row.nodes.is_empty() && !row.nodes.iter().any(|n| n == &caller.node || n == &caller.node_fqdn) {
-        return None;
+/// is pinned to other machines, or to a different device that had the name.
+/// The second value is a machine name to record this device's ID for.
+pub fn grant_for(row: &TokenRow, caller: &Caller) -> Option<(TokenGrant, Option<String>)> {
+    let mut pin = None;
+    if !row.nodes.is_empty() {
+        let n = row.nodes.iter().find(|n| *n == &caller.node || *n == &caller.node_fqdn)?;
+        match row.node_pins.get(n) {
+            Some(id) if id != &caller.node_id => return None,
+            Some(_) => {}
+            None if !caller.node_id.is_empty() => pin = Some(n.clone()),
+            None => {}
+        }
     }
-    Some(TokenGrant {
+    let grant = TokenGrant {
         name: row.name.clone(),
         scopes: row.scopes.iter().filter_map(|s| Scope::parse(s)).collect(),
         secrets: row.secrets.clone(),
         proxy_get_only: row.proxy_get_only,
-    })
+    };
+    Some((grant, pin))
 }
 
 pub fn ct_eq(a: &str, b: &str) -> bool {
@@ -336,6 +345,7 @@ mod tests {
             secrets: vec!["*".into()],
             nodes: vec!["mac".into()],
             proxy_get_only: false,
+            node_pins: Default::default(),
             created_at: 0,
             last_used_at: None,
             revoked_at: None,

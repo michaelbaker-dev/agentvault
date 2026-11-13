@@ -229,8 +229,11 @@ impl App {
                 .db
                 .token_by_hash(&auth::token_hash(tok))?
                 .ok_or_else(|| ApiError::unauthorized("invalid or revoked token"))?;
-            let grant = auth::grant_for(&row, caller)
+            let (grant, pin) = auth::grant_for(&row, caller)
                 .ok_or_else(|| ApiError::forbidden(format!("token '{}' is not allowed from {}", row.name, caller.node)))?;
+            if let Some(name) = pin {
+                self.db.token_pin(row.id, &name, &caller.node_id)?;
+            }
             self.db.token_touch(row.id)?;
             return Ok(Principal::Token(grant));
         }

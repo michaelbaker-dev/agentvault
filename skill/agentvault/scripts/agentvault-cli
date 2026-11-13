@@ -17,9 +17,12 @@ Settings: AGENTVAULT_URL or ~/.config/agentvault/url; the token in
 Setups from before the rename (~/.config/keys, KEYS_*) keep working.
 Standard library only.
 """
+import base64
 import getpass
 import json
 import os
+import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -54,14 +57,24 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+def safe_vault_url(url, saved):
+    """The token only goes to an https vault on the tailnet (*.ts.net) or to
+    the address saved at setup, so an environment variable set by some
+    project can't redirect it elsewhere."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    return parts.scheme == "https" and bool(host) and (host.endswith(".ts.net") or url.rstrip("/") == saved.rstrip("/"))
+
+
 def settings():
-    url = env("URL")
-    if not url and os.path.exists(f"{CONF}/url"):
-        url = open(f"{CONF}/url").read().strip()
+    saved = open(f"{CONF}/url").read().strip() if os.path.exists(f"{CONF}/url") else ""
+    url = env("URL") or saved
     token_file = env("TOKEN_FILE") or f"{CONF}/token"
     token = open(token_file).read().strip() if os.path.exists(token_file) else ""
     if not url or not token:
         die(SETUP)
+    if not safe_vault_url(url, saved):
+        die(f"Refusing to send the vault token to {url}: the vault address must be https and on your tailnet (*.ts.net).")
     return url.rstrip("/"), token
 
 
@@ -215,6 +228,39 @@ def cmd_call(args):
     sys.exit(0 if status < 400 else 2)
 
 
+def redaction_forms(secrets):
+    """Byte strings to blank out of a program's output: each value, each line
+    of a multi-line value (PEM keys, service-account JSON), and their base64
+    (at any alignment), URL-encoded and JSON-escaped forms. This guards against
+    accidents; a program determined to print its key can still disguise it."""
+    forms = set()
+    for secret in secrets:
+        pieces = [secret] + [line.strip() for line in secret.splitlines() if len(line.strip()) >= 8]
+        for v in pieces:
+            raw = v.encode()
+            forms.add(raw)
+            forms.add(json.dumps(v)[1:-1].encode())
+            for safe in ("", "-._~"):
+                q = urllib.parse.quote(v, safe=safe)
+                forms.add(q.encode())
+                forms.add(re.sub(r"%[0-9A-F]{2}", lambda m: m.group(0).lower(), q).encode())
+            for enc in (base64.standard_b64encode, base64.urlsafe_b64encode):
+                for k in range(3):
+                    e = enc(b"\0" * k + raw)
+                    start = 4 if k else 0
+                    if len(e) >= start + 4 + 8:
+                        forms.add(e[start:len(e) - 4])
+                forms.add(enc(raw).rstrip(b"="))
+    return sorted((f for f in forms if len(f) >= 6), key=len, reverse=True)
+
+
+def cmd_mcp_headers(_):
+    """Prints the Authorization header for Claude Code's headersHelper, so the
+    token stays in its 0600 file instead of Claude Code's settings or argv."""
+    _, token = settings()
+    print(json.dumps({"Authorization": f"Bearer {token}"}))
+
+
 def cmd_run(args):
     if "--" not in args or args.index("--") == 0 or args.index("--") == len(args) - 1:
         die("usage: agentvault-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
@@ -230,17 +276,30 @@ def cmd_run(args):
         for part, value in (r.get("parts") or {}).items():
             env[f"{var}_{part.upper()}"] = value
             secrets.append(value)
-    needles = sorted({s.encode() for s in secrets if len(s) >= 4}, key=len, reverse=True)
+    needles = redaction_forms(secrets)
+    hold = max((len(n) for n in needles), default=1) - 1
 
-    def blank(line):
+    def blank(data):
         for n in needles:
-            line = line.replace(n, b"[redacted by agentvault]")
-        return line
+            data = data.replace(n, b"[redacted by agentvault]")
+        return data
 
     def pump(src, dst):
-        for line in iter(src.readline, b""):
-            dst.write(blank(line))
-            dst.flush()
+        # Work on the stream, not line by line, so a key split across lines
+        # (or across reads) is still caught; keep back enough bytes to finish
+        # a match that straddles two reads.
+        buf = b""
+        while True:
+            chunk = src.read1(65536) if hasattr(src, "read1") else src.read(65536)
+            if not chunk:
+                break
+            buf = blank(buf + chunk)
+            if len(buf) > hold:
+                dst.write(buf[: len(buf) - hold])
+                dst.flush()
+                buf = buf[len(buf) - hold:]
+        dst.write(blank(buf))
+        dst.flush()
 
     try:
         child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -295,20 +354,22 @@ def cmd_setup(args):
         if not no_mcp:
             print("Claude Code isn't installed here, so MCP wasn't set up. The helper works on its own.")
         return
-    # Replace any earlier registration; output is hidden because it can echo the header.
+    token = ""
     # Replace this or an older registration (named "keys" before the rename).
     for old in ("agentvault", "keys"):
         subprocess.run([claude, "mcp", "remove", "--scope", "user", old], capture_output=True)
-    r = subprocess.run([claude, "mcp", "add", "--transport", "http", "--scope", "user", "agentvault", url + "/mcp",
-                        "--header", f"Authorization: Bearer {token}"], capture_output=True, text=True)
-    token = ""
+    # Claude Code asks this helper for the header on each connection, so the
+    # token never appears on a command line or in Claude Code's settings file.
+    helper = shlex.quote(os.path.abspath(sys.argv[0])) + " mcp-headers"
+    config = json.dumps({"type": "http", "url": url + "/mcp", "headersHelper": helper})
+    r = subprocess.run([claude, "mcp", "add-json", "--scope", "user", "agentvault", config], capture_output=True, text=True)
     if r.returncode != 0:
         die("Saving worked, but adding the MCP server to Claude Code failed. Try again, or use the helper on its own.")
     print("Claude Code's MCP server 'agentvault' is set up for all your projects.")
     print("Restart Claude Code to load it (in a session: exit, then run `claude --continue`).")
 
 
-COMMANDS = {"setup": cmd_setup, "check": cmd_check, "list": cmd_list, "describe": cmd_describe, "call": cmd_call, "run": cmd_run}
+COMMANDS = {"setup": cmd_setup, "mcp-headers": cmd_mcp_headers, "check": cmd_check, "list": cmd_list, "describe": cmd_describe, "call": cmd_call, "run": cmd_run}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

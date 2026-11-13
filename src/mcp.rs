@@ -239,6 +239,13 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
             ev.detail("scope denied"),
         );
     }
+    // Same rule as the REST proxy: an owner session must be fresh.
+    if app.require_fresh(p).is_err() {
+        return fail(
+            "confirm your passphrase in the web interface first, or use a token".into(),
+            ev.detail("needs passphrase"),
+        );
+    }
     let Ok(method) = Method::from_bytes(method_s.as_bytes()) else {
         return fail("unsupported method".into(), ev);
     };

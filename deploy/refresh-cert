@@ -1,10 +1,14 @@
 #!/bin/sh
-# Runs as root: (re)issues the Tailscale certificate for this machine and makes
-# it readable only by the agentvault service user. The server reloads it every 6h.
+# Runs as root: (re)issues the Tailscale certificate for this machine. The
+# files live in a root-owned directory the service can read but not change, so
+# the service user can't plant symlinks that root would then follow. The
+# server reloads the certificate every 6h.
 set -eu
 HOST=$(sed -n 's/^hostname *= *"\(.*\)"/\1/p' /etc/agentvault/config.toml)
-DIR=/var/lib/agentvault/tls
-install -d -m 0700 -o agentvault -g agentvault "$DIR"
+DIR=/etc/agentvault/tls
+[ ! -L "$DIR" ] || { echo "$DIR is a symlink; refusing" >&2; exit 1; }
+install -d -m 0750 -o root -g agentvault "$DIR"
 tailscale cert --cert-file "$DIR/cert.pem" --key-file "$DIR/key.pem" "$HOST"
-chown agentvault:agentvault "$DIR/cert.pem" "$DIR/key.pem"
-chmod 0600 "$DIR/key.pem"
+chown -h root:agentvault "$DIR/cert.pem" "$DIR/key.pem"
+chmod 0644 "$DIR/cert.pem"
+chmod 0640 "$DIR/key.pem"

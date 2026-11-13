@@ -549,10 +549,21 @@
     }
   }
 
+  // Secrets copied from the vault don't stay on the clipboard (where clipboard
+  // managers and sync can keep them): it's cleared after a short while unless
+  // something else was copied from this page since.
+  const CLIPBOARD_SECONDS = 45;
+  let clipboardTimer = null;
+  async function copySecret(text) {
+    await navigator.clipboard.writeText(text);
+    clearTimeout(clipboardTimer);
+    clipboardTimer = setTimeout(() => navigator.clipboard.writeText("").catch(() => {}), CLIPBOARD_SECONDS * 1000);
+  }
+
   async function copyValue(name) {
     try {
-      await navigator.clipboard.writeText(await fetchValue(name));
-      toast(`Copied ${name} to the clipboard.`);
+      await copySecret(await fetchValue(name));
+      toast(`Copied ${name}. It's cleared from the clipboard in ${CLIPBOARD_SECONDS} seconds.`);
     } catch (e) {
       toast(e.message || "Couldn't copy", true);
     }
@@ -1851,12 +1862,14 @@
     if (r.scopes.includes("list")) lines.push(["List secrets", `curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" ${origin}/v1/secrets`]);
     if (lines.some(([, c]) => c.startsWith("curl"))) lines.splice(lines.findIndex(([, c]) => c.startsWith("curl")), 0, env);
     const copy = (text) => navigator.clipboard.writeText(text).then(() => toast("Copied."), () => toast("Couldn't copy", true));
+    const copyToken = () =>
+      copySecret(tok).then(() => toast(`Copied. It's cleared from the clipboard in ${CLIPBOARD_SECONDS} seconds.`), () => toast("Couldn't copy", true));
     return h(
       "div",
       { class: "secret-once", role: "status" },
       h("h3", { text: `Token "${r.name}" created. Copy it now: it won't be shown again.` }),
       h("pre", { text: tok }),
-      h("div", { class: "row-actions" }, h("button", { class: "btn primary", type: "button", onclick: () => copy(tok), text: "Copy token" })),
+      h("div", { class: "row-actions" }, h("button", { class: "btn primary", type: "button", onclick: copyToken, text: "Copy token" })),
       lines.map(([label, cmd]) => (cmd ? [h("p", { class: "small", style: null, text: label }), h("pre", { text: cmd }), h("button", { class: "btn", type: "button", onclick: () => copy(cmd.replace(/\\\n\s*/g, "")), text: "Copy command" })] : h("p", { class: "hint", text: label }))),
     );
   }

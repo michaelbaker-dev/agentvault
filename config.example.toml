@@ -18,8 +18,8 @@ data_dir = "/var/lib/agentvault/data"
 # event_retention_days = 365
 
 [tls]
-cert_file = "/var/lib/agentvault/tls/cert.pem"
-key_file = "/var/lib/agentvault/tls/key.pem"
+cert_file = "/etc/agentvault/tls/cert.pem"
+key_file = "/etc/agentvault/tls/key.pem"
 # Run `tailscale cert` from the server itself (needs `tailscale set --operator`).
 # The systemd units refresh the certificate as root instead, so leave this off.
 # renew_with_tailscale = false

@@ -546,11 +546,16 @@ fn view_with(m: &SecretMeta, all: &[SecretMeta]) -> serde_json::Value {
     .expect("json");
     // Where proxy paths go: the owner's base URL or the provider's default.
     v["proxy_target"] = target.map(|t| serde_json::Value::from(t.base.as_str())).unwrap_or_default();
-    // `all` is what the caller may see; don't name a manager outside it.
-    if m.parent.as_ref().is_some_and(|p| !all.iter().any(|o| &o.name == p)) {
+    // `all` is what the caller may see; don't name a manager outside it,
+    // either directly or inside the rotation status text.
+    let hidden_parent = m.parent.as_ref().is_some_and(|p| !all.iter().any(|o| &o.name == p));
+    if hidden_parent {
         v["parent"] = serde_json::Value::Null;
     }
     v["rotation"] = crate::rotate::info(m, all);
+    if hidden_parent && !v["rotation"]["manager_problem"].is_null() {
+        v["rotation"]["manager_problem"] = serde_json::Value::from("its manager is a key you can't see");
+    }
     v
 }
 
@@ -800,7 +805,7 @@ pub fn create_internal(app: &AppRef, mut ns: NewSecret) -> ApiResult<(SecretMeta
     if let Some(Some(parent)) = &ns.settings.parent {
         app.db.secret_force_owner_only(parent)?;
     }
-    tokio::spawn(describe::run(app.clone(), id, 1, ns.verify));
+    tokio::spawn(describe::run(app.clone(), id, 1, ns.verify, true));
     let meta = app.db.secret_by_id(id)?.ok_or_else(ApiError::not_found)?;
     Ok((meta, duplicate_of))
 }
@@ -820,6 +825,10 @@ async fn create_secret(
         ));
     }
     require(&p, Scope::Write, &name, &ev)?;
+    // An owner creating a key needs the passphrase: a new value is compared
+    // with every stored one (a duplicate is a confirmed guess), and the
+    // settings can name a manager, provider or linked fields.
+    app.require_fresh(&p)?;
     protect_describer_key(&app, &p, &name, &ev)?;
     if body.settings.any() && !p.is_owner() {
         return Err(
@@ -925,6 +934,13 @@ async fn update_secret(
     }
 
     let new_name = body.name.as_deref().map(str::trim).filter(|n| *n != name).map(String::from);
+    // A rename can move a key into a token's name pattern, and a new value is
+    // checked against every stored value for duplicates (a guessing oracle):
+    // both need the passphrase when the owner does them.
+    let value_given = body.value.as_deref().is_some_and(|v| !v.trim().is_empty()) || body.extras.is_some();
+    if new_name.is_some() || value_given {
+        app.require_fresh(&p)?;
+    }
     if let Some(n) = &new_name {
         if !valid_name(n) {
             return Err(ApiError::bad_request("invalid new name"));
@@ -945,6 +961,10 @@ async fn update_secret(
     }
     if sb.proxy.is_some() || sb.parent.is_some() || sb.owner_only == Some(false) || sb.provider.is_some() || sb.fields.is_some() {
         app.require_fresh(&p)?;
+    }
+    // Tokens minted from the old provider or fields mustn't outlive them.
+    if sb.provider.is_some() || sb.fields.is_some() {
+        app.minted.forget(meta.id);
     }
     let settings = sb.to_settings(&app, new_name.as_deref().unwrap_or(&name))?;
     let proxy = sb.proxy.as_ref().map(proxy_change).transpose()?;
@@ -995,13 +1015,13 @@ async fn update_secret(
     if let Some(m) = &new_material {
         duplicate_of = app.duplicate_of(&m.value, Some(meta.id))?;
         let version = app.save_version(meta.id, m, None)?;
-        tokio::spawn(describe::run(app.clone(), meta.id, version, body.verify.unwrap_or(true)));
+        tokio::spawn(describe::run(app.clone(), meta.id, version, body.verify.unwrap_or(true), true));
         redescribe = false;
     }
     if redescribe {
         let cur = load(&app, &final_name, &ev)?;
         app.db.secret_set_describe_status(meta.id, "pending")?;
-        tokio::spawn(describe::run(app.clone(), meta.id, cur.version, body.verify.unwrap_or(true)));
+        tokio::spawn(describe::run(app.clone(), meta.id, cur.version, body.verify.unwrap_or(true), false));
     }
     drop(new_material);
     let updated = load(&app, &final_name, &ev)?;
@@ -1042,6 +1062,7 @@ async fn delete_secret(
     let meta = load(&app, &name, &ev)?;
     require_use(&p, &meta, &ev)?;
     app.db.secret_delete(meta.id)?;
+    app.minted.forget(meta.id);
     Ok(with_event(Json(json!({ "deleted": name })), ev))
 }
 
@@ -1079,7 +1100,7 @@ async fn redescribe(
     require_use(&p, &meta, &ev)?;
     app.vault.ensure_unsealed()?;
     app.db.secret_set_describe_status(meta.id, "pending")?;
-    tokio::spawn(describe::run(app.clone(), meta.id, meta.version, true));
+    tokio::spawn(describe::run(app.clone(), meta.id, meta.version, true, false));
     Ok(with_event((StatusCode::ACCEPTED, Json(json!({ "describing": name }))), ev))
 }
 
@@ -1253,6 +1274,9 @@ async fn proxy_request(
         .secret(&name)
         .detail(truncate(&format!("{method} /{path}"), 200));
     require(&p, Scope::Proxy, &name, &ev)?;
+    // The owner can use every key, owner-only ones included: a cookie taken by
+    // an agent running as the owner must not be enough to drive them.
+    app.require_fresh(&p).map_err(|e| e.event(ev.clone().detail("needs passphrase")))?;
     let get_only = matches!(&p, Principal::Token(t) if t.proxy_get_only);
     if !proxy::allowed_method(&method, get_only) {
         let msg = if get_only {

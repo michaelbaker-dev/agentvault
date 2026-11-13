@@ -1302,6 +1302,20 @@ pub fn by_id(id: &str) -> Option<&'static Provider> {
 }
 
 /// The provider of a stored secret: the owner's choice if set, else detected.
+/// Like [`resolve`], but a secret that already has a provider keeps it unless
+/// `redetect` (its value changed) or the owner chose one. Detection reads the
+/// name and notes, which a `write` token can edit, and the provider decides
+/// where the proxy sends the key, so editing notes must not change it.
+pub fn resolve_for(meta: &SecretMeta, value: &str, redetect: bool) -> Option<&'static Provider> {
+    if !redetect
+        && meta.provider_hint.is_none()
+        && let Some(p) = meta.provider.as_deref().and_then(by_id)
+    {
+        return Some(refine(p, &meta.fields));
+    }
+    resolve(meta, value)
+}
+
 pub fn resolve(meta: &SecretMeta, value: &str) -> Option<&'static Provider> {
     let p = meta
         .provider_hint

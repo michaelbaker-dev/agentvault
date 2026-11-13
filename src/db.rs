@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS attention_acks (
 /// Columns added after the first release: (table, column, definition).
 const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("tokens", "proxy_get_only", "INTEGER NOT NULL DEFAULT 0"),
+    ("tokens", "node_pins", "TEXT NOT NULL DEFAULT '{}'"),
     ("secrets", "kind", "TEXT NOT NULL DEFAULT 'api_key'"),
     ("secrets", "owner_only", "INTEGER NOT NULL DEFAULT 0"),
     ("secrets", "fields", "TEXT NOT NULL DEFAULT '{}'"),
@@ -247,6 +248,10 @@ pub struct TokenRow {
     pub secrets: Vec<String>,
     pub nodes: Vec<String>,
     pub proxy_get_only: bool,
+    /// Machine name -> Tailscale stable node ID, recorded on first use, so a
+    /// different device that later takes the name isn't let in.
+    #[serde(skip)]
+    pub node_pins: std::collections::HashMap<String, String>,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub revoked_at: Option<i64>,
@@ -523,19 +528,33 @@ impl Db {
         let now = now_ms();
         let mut c = self.c();
         let tx = c.transaction()?;
+        // Ids are never reused, even after the newest secret is deleted, so
+        // nothing keyed by id (minted tokens, a describe still running, the
+        // ciphertext's AAD) can carry over from a deleted secret to a new one.
+        let hwm: i64 = tx
+            .query_row("SELECT value FROM meta WHERE key = 'secret_id_hwm'", [], |r| r.get::<_, Vec<u8>>(0))
+            .optional()?
+            .and_then(|b| std::str::from_utf8(&b).ok().and_then(|s| s.parse().ok()))
+            .unwrap_or(0);
+        let max: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM secrets", [], |r| r.get(0))?;
+        let id = hwm.max(max) + 1;
         tx.execute(
-            "INSERT INTO secrets(name, notes, tags, version, version_seq, created_at, updated_at, parts, value_mac) \
-             VALUES (?1, ?2, ?3, 1, 1, ?4, ?4, ?5, ?6)",
+            "INSERT INTO meta(key, value) VALUES ('secret_id_hwm', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![id.to_string().into_bytes()],
+        )?;
+        tx.execute(
+            "INSERT INTO secrets(id, name, notes, tags, version, version_seq, created_at, updated_at, parts, value_mac) \
+             VALUES (?7, ?1, ?2, ?3, 1, 1, ?4, ?4, ?5, ?6)",
             params![
                 name,
                 notes,
                 serde_json::to_string(tags).expect("json"),
                 now,
                 serde_json::to_string(v.parts).expect("json"),
-                v.mac
+                v.mac,
+                id
             ],
         )?;
-        let id = tx.last_insert_rowid();
         apply_settings(&tx, id, settings)?;
         let (value_ct, dek_ct) = encrypt(id, 1).map_err(enc_err)?;
         tx.execute(
@@ -805,13 +824,14 @@ impl Db {
             last_used_at: r.get(6)?,
             revoked_at: r.get(7)?,
             proxy_get_only: r.get(8)?,
+            node_pins: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
         })
     }
 
     pub fn token_list(&self) -> DbResult<Vec<TokenRow>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only FROM tokens ORDER BY id DESC",
+            "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens ORDER BY id DESC",
         )?;
         let rows = st.query_map([], Self::token_from_row)?;
         rows.collect()
@@ -820,7 +840,7 @@ impl Db {
     pub fn token_by_hash(&self, hash: &[u8]) -> DbResult<Option<TokenRow>> {
         self.c()
             .query_row(
-                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only FROM tokens \
+                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens \
                  WHERE hash = ?1 AND revoked_at IS NULL",
                 [hash],
                 Self::token_from_row,
@@ -831,7 +851,7 @@ impl Db {
     pub fn token_get(&self, id: i64) -> DbResult<Option<TokenRow>> {
         self.c()
             .query_row(
-                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only FROM tokens WHERE id = ?1",
+                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens WHERE id = ?1",
                 [id],
                 Self::token_from_row,
             )
@@ -849,7 +869,7 @@ impl Db {
         proxy_get_only: bool,
     ) -> DbResult<bool> {
         let n = self.c().execute(
-            "UPDATE tokens SET name = ?2, scopes = ?3, secrets = ?4, nodes = ?5, proxy_get_only = ?6 \
+            "UPDATE tokens SET name = ?2, scopes = ?3, secrets = ?4, nodes = ?5, proxy_get_only = ?6, node_pins = '{}' \
              WHERE id = ?1 AND revoked_at IS NULL",
             params![
                 id,
@@ -861,6 +881,16 @@ impl Db {
             ],
         )?;
         Ok(n > 0)
+    }
+
+    /// Records the device a pinned machine name belongs to (first use only).
+    pub fn token_pin(&self, id: i64, name: &str, node_id: &str) -> DbResult<()> {
+        self.c().execute(
+            "UPDATE tokens SET node_pins = json_set(node_pins, '$.' || json_quote(?2), ?3) \
+             WHERE id = ?1 AND json_extract(node_pins, '$.' || json_quote(?2)) IS NULL",
+            params![id, name, node_id],
+        )?;
+        Ok(())
     }
 
     pub fn token_touch(&self, id: i64) -> DbResult<()> {

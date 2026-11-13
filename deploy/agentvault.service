@@ -48,6 +48,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 StateDirectory=agentvault
 StateDirectoryMode=0700
 UMask=0077
+RemoveIPC=yes
 LimitCORE=0
 
 [Install]

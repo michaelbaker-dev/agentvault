@@ -237,6 +237,14 @@ const STRIP_REQUEST: &[&str] = &[
     "host",
     // Ask for an uncompressed reply so the key can be redacted if echoed.
     "accept-encoding",
+    // A partial reply could carry an echoed key in pieces too small to match.
+    "range",
+    "if-range",
+    // These turn a GET into another method at many providers, which would
+    // get round a GET-only token.
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
     "authorization",
     "cookie",
     "x-api-key",
@@ -311,7 +319,18 @@ pub async fn send(
         .send()
         .await
         .map_err(|e| format!("upstream request failed: {}", without_url(&e)))?;
+    // We asked for an uncompressed reply; a compressed one couldn't be checked
+    // for an echoed key, so it isn't passed on.
+    if compressed(resp.headers()) {
+        return Err("the provider sent a compressed reply, which the vault can't check for the key".into());
+    }
     Ok((resp, start.elapsed()))
+}
+
+/// True if a reply's body is encoded (gzip, br...), so it can't be redacted.
+fn compressed(h: &reqwest::header::HeaderMap) -> bool {
+    h.get(reqwest::header::CONTENT_ENCODING)
+        .is_some_and(|e| !e.as_bytes().eq_ignore_ascii_case(b"identity"))
 }
 
 /// reqwest errors include the URL, which for query-style auth contains the key.
@@ -367,16 +386,45 @@ impl Redactor {
     pub fn new(secrets: &[&str]) -> Self {
         let b64 = base64::engine::general_purpose::STANDARD;
         let mut forms: Vec<Vec<u8>> = vec![];
+        // RFC 3986 leaves - . _ ~ unencoded; NON_ALPHANUMERIC encodes them.
+        const RFC3986: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+            .remove(b'-')
+            .remove(b'.')
+            .remove(b'_')
+            .remove(b'~');
         for secret in secrets.iter().filter(|s| !s.is_empty()) {
             forms.extend([
                 secret.as_bytes().to_vec(),
                 b64.encode(secret).into_bytes(),
                 b64.encode(format!("{secret}:")).into_bytes(),
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret).into_bytes(),
-                percent_encoding::utf8_percent_encode(secret, percent_encoding::NON_ALPHANUMERIC)
-                    .to_string()
-                    .into_bytes(),
             ]);
+            // Percent-encoded, both ways of choosing what to encode, in upper
+            // and lower case hex.
+            for set in [percent_encoding::NON_ALPHANUMERIC, RFC3986] {
+                let enc = percent_encoding::utf8_percent_encode(secret, set).to_string();
+                if enc != *secret {
+                    forms.push(lower_hex(&enc).into_bytes());
+                    forms.push(enc.into_bytes());
+                }
+            }
+            // Base64 of the key wherever it sits in a longer string: for each of
+            // the three alignments, the encoded characters that depend only on
+            // the key (dropping the 4 at each end that mix in neighbours).
+            for engine in [
+                &base64::engine::general_purpose::STANDARD,
+                &base64::engine::general_purpose::URL_SAFE,
+            ] {
+                for k in 0..3 {
+                    let mut buf = vec![0u8; k];
+                    buf.extend_from_slice(secret.as_bytes());
+                    let enc = engine.encode(&buf);
+                    let start = if k == 0 { 0 } else { 4 };
+                    if enc.len() >= start + 4 + 8 {
+                        forms.push(enc.as_bytes()[start..enc.len() - 4].to_vec());
+                    }
+                }
+            }
         }
         forms.retain(|f| f.len() >= 8);
         forms.sort();
@@ -468,8 +516,59 @@ where
     })
 }
 
+/// `%2F` -> `%2f`, leaving the rest alone.
+fn lower_hex(enc: &str) -> String {
+    let b = enc.as_bytes();
+    let mut out = String::with_capacity(enc.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            out.push('%');
+            out.push((b[i + 1] as char).to_ascii_lowercase());
+            out.push((b[i + 2] as char).to_ascii_lowercase());
+            i += 3;
+        } else {
+            out.push(b[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn review_hardening_headers_encodings_and_offsets() {
+        // Partial replies and method overrides never reach the provider.
+        let mut h = HeaderMap::new();
+        for n in ["range", "if-range", "x-http-method-override", "x-http-method", "x-method-override"] {
+            h.insert(HeaderName::from_static(n), HeaderValue::from_static("x"));
+        }
+        h.insert("accept", HeaderValue::from_static("application/json"));
+        let out = forward_request_headers(&h, &Auth::Bearer);
+        assert_eq!(out.len(), 1, "{out:?}");
+        // Compressed replies are refused.
+        let mut r = reqwest::header::HeaderMap::new();
+        assert!(!compressed(&r));
+        r.insert("content-encoding", "identity".parse().unwrap());
+        assert!(!compressed(&r));
+        r.insert("content-encoding", "gzip".parse().unwrap());
+        assert!(compressed(&r));
+        // Echoed keys are caught in more encodings.
+        let key = "ab/cd+ef=gh-ij_kl.mn~op";
+        let red = Redactor::new(&[key]);
+        let b64 = base64::engine::general_purpose::STANDARD;
+        for echoed in [
+            "ab%2Fcd%2Bef%3Dgh-ij_kl.mn~op".to_string(),         // RFC 3986
+            "ab%2fcd%2bef%3dgh%2dij%5fkl%2emn%7eop".to_string(), // lower-case hex
+            b64.encode(format!("x{key}y")),                      // base64, offset 1
+            b64.encode(format!("xy{key}z")),                     // base64, offset 2
+            base64::engine::general_purpose::URL_SAFE.encode(format!("x{key}")),
+        ] {
+            assert!(red.contains(echoed.as_bytes()), "missed {echoed}");
+        }
+    }
+
     use super::*;
 
     #[test]

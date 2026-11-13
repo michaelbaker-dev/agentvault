@@ -89,10 +89,15 @@ owner = "$OWNER"
 data_dir = "/var/lib/agentvault/data"
 
 [tls]
-cert_file = "/var/lib/agentvault/tls/cert.pem"
-key_file = "/var/lib/agentvault/tls/key.pem"
+cert_file = "/etc/agentvault/tls/cert.pem"
+key_file = "/etc/agentvault/tls/key.pem"
 CONF
   chgrp agentvault /etc/agentvault/config.toml && chmod 0640 /etc/agentvault/config.toml
+fi
+# The certificate now lives in root-owned /etc/agentvault/tls (see refresh-cert).
+if grep -q '/var/lib/agentvault/tls/' /etc/agentvault/config.toml; then
+  sed -i 's#/var/lib/agentvault/tls/#/etc/agentvault/tls/#g' /etc/agentvault/config.toml
+  rm -rf /var/lib/agentvault/tls
 fi
 install -m 0644 "$DEPLOY"/agentvault.service "$DEPLOY"/agentvault-cert.service "$DEPLOY"/agentvault-cert.timer /etc/systemd/system/
 # Reinstalling or upgrading keeps automatic unlock on if it was.

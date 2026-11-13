@@ -2436,3 +2436,189 @@ async fn attention_items_can_be_okd_until_the_situation_changes() {
     .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
+
+// ---- regression tests from the November security review ----
+
+#[tokio::test]
+async fn a_stale_owner_session_cant_drive_keys_or_test_guesses() {
+    let app = test_app();
+    let s = setup(&app).await;
+    add(&app, &s, "OPENAI_API_KEY", &fake("sk-proj-", 'q', 36)).await;
+    // An agent running as the owner has the cookie and the CSRF value, but
+    // the passphrase was entered long ago.
+    app.sessions.make_stale();
+    let h = s.hdrs();
+    let r = call(&app, LAPTOP, "GET", "/v1/proxy/OPENAI_API_KEY/v1/models", &h, None).await;
+    assert_eq!(
+        r.status,
+        StatusCode::PRECONDITION_REQUIRED,
+        "proxying as the owner needs the passphrase"
+    );
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/mcp",
+        &h,
+        Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                     "params": { "name": "proxy_request", "arguments": { "secret": "OPENAI_API_KEY", "path": "/v1/models" } } })),
+    )
+    .await;
+    assert_eq!(r.body["result"]["isError"], true, "{:?}", r.body);
+    assert!(tool_json(&r)["error"].as_str().unwrap().contains("passphrase"));
+    for (m, path, body) in [
+        ("POST", "/v1/import/preview", json!({ "text": "x password: guess1" })),
+        (
+            "POST",
+            "/v1/secrets",
+            json!({ "name": "GUESS", "value": "guess-number-one", "verify": false }),
+        ),
+        (
+            "PATCH",
+            "/v1/secrets/OPENAI_API_KEY",
+            json!({ "name": "MOVED_INTO_A_TOKEN_PATTERN" }),
+        ),
+        (
+            "PATCH",
+            "/v1/secrets/OPENAI_API_KEY",
+            json!({ "value": "guess-number-two", "verify": false }),
+        ),
+    ] {
+        let r = call(&app, LAPTOP, m, path, &h, Some(body)).await;
+        assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED, "{m} {path}: {:?}", r.body);
+    }
+    assert!(app.db.secret_get("GUESS").unwrap().is_none());
+    assert!(app.db.secret_get("OPENAI_API_KEY").unwrap().is_some(), "not renamed");
+    // Notes and tags stay easy to edit.
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OPENAI_API_KEY",
+        &h,
+        Some(json!({ "notes": "prod" })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn secret_ids_are_never_reused() {
+    let app = test_app();
+    let s = setup(&app).await;
+    add(&app, &s, "A", "value-aaaaaaaaaa").await;
+    let a = app.db.secret_get("A").unwrap().unwrap().id;
+    let r = call(&app, LAPTOP, "DELETE", "/v1/secrets/A", &s.hdrs(), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    add(&app, &s, "B", "value-bbbbbbbbbb").await;
+    let b = app.db.secret_get("B").unwrap().unwrap().id;
+    assert!(b > a, "a new secret must not inherit a deleted one's id ({a} -> {b})");
+}
+
+#[tokio::test]
+async fn a_write_token_cant_change_where_a_key_is_sent() {
+    let app = test_app();
+    let s = setup(&app).await;
+    // Cloudflare's plain 40-character tokens are recognised only by the hint word.
+    let value = fake("", 'C', 40);
+    let r = add_with(
+        &app,
+        &s,
+        json!({ "name": "CF_DNS", "value": value, "notes": "Cloudflare DNS token" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let wait = |app: AppRef| async move {
+        for _ in 0..50 {
+            let m = app.db.secret_get("CF_DNS").unwrap().unwrap();
+            if m.describe_status != "pending" {
+                return m.provider;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        panic!("describe didn't finish");
+    };
+    assert_eq!(wait(app.clone()).await.as_deref(), Some("cloudflare"));
+    let tok = token(&app, &s, &["list", "write", "proxy"], &["CF_*"], &[]).await;
+    let h = [("authorization", tok.as_str())];
+    let r = call(&app, SPARK, "PATCH", "/v1/secrets/CF_DNS", &h, Some(json!({ "notes": "magic" }))).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = call(&app, SPARK, "POST", "/v1/secrets/CF_DNS/describe", &h, None).await;
+    assert!(r.status.is_success(), "{:?}", r.body);
+    assert_eq!(
+        wait(app.clone()).await.as_deref(),
+        Some("cloudflare"),
+        "editing notes must not re-route the key"
+    );
+}
+
+#[tokio::test]
+async fn token_pinning_holds_to_the_device_not_just_its_name() {
+    let base = test_app();
+    // Another device that has taken the name "server".
+    let mut peers: HashMap<_, _> = match &base.resolver {
+        Resolver::Fixed(m) => m.clone(),
+        _ => unreachable!(),
+    };
+    let (ip, mut impostor) = caller("100.64.0.9", "server", OWNER, &[]);
+    impostor.node_id = "n-impostor".into();
+    peers.insert(ip, impostor);
+    let app = Arc::new(App {
+        resolver: Resolver::Fixed(peers),
+        ..clone_app(&base)
+    });
+    let s = setup(&app).await;
+    add(&app, &s, "K", "value-123456789").await;
+    let tok = token(&app, &s, &["list"], &["*"], &["server"]).await;
+    let h = [("authorization", tok.as_str())];
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::OK,
+        "first use pins it"
+    );
+    assert_eq!(
+        call(&app, "100.64.0.9", "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(call(&app, SPARK, "GET", "/v1/secrets", &h, None).await.status, StatusCode::OK);
+    // Editing the token's machines resets the pin.
+    let id = app.db.token_list().unwrap()[0].id;
+    let edit = json!({ "name": "test", "scopes": ["list"], "secrets": ["*"], "nodes": ["server"] });
+    assert_eq!(
+        call(&app, LAPTOP, "PATCH", &format!("/v1/tokens/{id}"), &s.hdrs(), Some(edit))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, "100.64.0.9", "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[test]
+fn import_labels_never_keep_a_password() {
+    use crate::import::{mask_line, parse};
+    let key = fake("sk-proj-", 'q', 40);
+    for (label, secret) in [
+        ("AWS console pass: Hunter2!", "Hunter2"),
+        ("openai bob:Hunter2!", "Hunter2"),
+        ("site user bob pass hunter2", "hunter2"),
+        ("wifi pass correcthorse", "correcthorse"),
+        ("Bank card pin 4821", "4821"),
+        ("router pw: tr0ub4dor", "tr0ub4dor"),
+    ] {
+        assert!(!mask_line(label).contains(secret), "{label} -> {}", mask_line(label));
+        let p = parse(&format!("{label} {key}"));
+        let c = &p.candidates[0];
+        let name = crate::import::suggest_name(c, c.provider());
+        assert!(!name.to_lowercase().contains(&secret.to_lowercase()), "{label} -> name {name}");
+    }
+    // Ordinary labels survive.
+    assert_eq!(mask_line("Router cabin ssh"), "Router cabin ssh");
+    assert_eq!(mask_line("Website deploys, GitHub"), "Website deploys, GitHub");
+}

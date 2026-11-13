@@ -2,6 +2,22 @@
 
 ## 0.1.0 (unreleased)
 
+### Security review (November 2026)
+
+Fixed before the first release, each with a regression test:
+- The web session now needs a recent passphrase to use keys through the proxy (REST and MCP), add or change a value, rename, or preview an import, so a stolen cookie can't drive owner-only keys or test password guesses.
+- Editing a key's notes or name can no longer change its detected provider (and so where the proxy sends it).
+- Secret ids are never reused, and minted access tokens are dropped when a key is deleted or its provider or fields change.
+- Machine-pinned tokens remember the device's stable Tailscale ID on first use.
+- A token no longer learns the name of an owner-only manager from rotation status.
+- Import hides passwords in labels ("pass", "pin", `user:password`, mixed letters and digits) from notes and suggested names; one import is capped at 500 keys.
+- The proxy strips `Range` and method-override headers, refuses compressed replies, and redacts more encodings of an echoed key.
+- The TLS certificate moved to root-owned `/etc/agentvault/tls`, so the root-run refresh script can't be tricked through symlinks.
+- `agentvault-cli`: Claude Code's MCP connection gets the token from a header helper (never on a command line or in its settings); `run` redacts across the whole output stream, multi-line keys and encoded forms; the token is only sent to an https `*.ts.net` vault or the saved address.
+- Copied secrets are cleared from the clipboard after 45 seconds.
+- CI: actions pinned to commit SHAs, no persisted credentials, least-privilege release jobs, a verified gitleaks download, and signed build provenance for releases.
+
+
 First public version, as AgentVault (developed under the working name "keys").
 
 - Encrypted vault (Argon2id + XChaCha20-Poly1305) reachable only over Tailscale, with a web interface, REST API, MCP endpoint and key-attaching proxy.

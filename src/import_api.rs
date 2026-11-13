@@ -46,16 +46,34 @@ pub async fn preview(
     State(app): State<AppRef>,
     Extension(caller): Extension<Caller>,
     headers: HeaderMap,
-    Json(body): Json<PreviewBody>,
+    Json(mut body): Json<PreviewBody>,
 ) -> ApiResult {
-    server::owner(&app, &headers, &caller)?;
+    let p = server::owner(&app, &headers, &caller)?;
+    // Each pasted value is checked against every stored one, so a preview is a
+    // way to test guesses: it needs the passphrase, like the commit.
+    app.require_fresh(&p)?;
     app.vault.ensure_unsealed()?;
     if body.text.len() > import::MAX_TEXT {
         return Err(ApiError::bad_request("that's more than 1 MiB of text"));
     }
-    let parsed = import::parse(&body.text);
-    let existing: Vec<(String, Option<String>)> = app.db.secret_list()?.into_iter().map(|m| (m.name, m.provider)).collect();
-    let items = import::propose(&parsed, &existing, |v| app.duplicate_of(v, None).ok().flatten());
+    // Parsing and duplicate checks are CPU work: keep them off the async workers.
+    let text = zeroize::Zeroizing::new(std::mem::take(&mut body.text));
+    let a = app.clone();
+    let (parsed, items) = tokio::task::spawn_blocking(move || -> ApiResult<_> {
+        let parsed = import::parse(&text);
+        if parsed.candidates.len() > import::MAX_CANDIDATES {
+            return Err(ApiError::bad_request(format!(
+                "that file has {} keys; import at most {} at a time",
+                parsed.candidates.len(),
+                import::MAX_CANDIDATES
+            )));
+        }
+        let existing: Vec<(String, Option<String>)> = a.db.secret_list()?.into_iter().map(|m| (m.name, m.provider)).collect();
+        let items = import::propose(&parsed, &existing, |v| a.duplicate_of(v, None).ok().flatten());
+        Ok((parsed, items))
+    })
+    .await
+    .map_err(ApiError::internal)??;
     let id = hex::encode(crate::crypto::random_bytes::<16>());
     {
         let mut map = app.imports.lock().unwrap_or_else(|p| p.into_inner());

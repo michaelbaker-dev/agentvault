@@ -25,7 +25,7 @@ const ACTOR: &str = "agentvault (describer)";
 
 /// Describes version `version` of secret `id`. The result is discarded if the
 /// value changes again before this finishes.
-pub async fn run(app: AppRef, id: i64, version: i64, verify: bool) {
+pub async fn run(app: AppRef, id: i64, version: i64, verify: bool, redetect: bool) {
     let Ok(_permit) = app.describe_gate.acquire().await else { return };
     let Ok(Some(meta)) = app.db.secret_by_id(id) else { return };
     let material = match app.reveal_version(&meta, version) {
@@ -36,7 +36,7 @@ pub async fn run(app: AppRef, id: i64, version: i64, verify: bool) {
             return;
         }
     };
-    let mut provider = providers::resolve(&meta, &material.value);
+    let mut provider = providers::resolve_for(&meta, &material.value, redetect);
     let mut facts = Map::new();
     facts.insert("length".into(), json!(material.value.chars().count()));
     let mut expires_at = None;

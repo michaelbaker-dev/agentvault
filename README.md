@@ -45,6 +45,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 2. On the Linux machine that will hold the vault, download and install it. Use `aarch64` instead of `x86_64` on ARM:
    ```sh
    curl -LO https://github.com/michaelbaker-dev/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
+   gh attestation verify agentvault-x86_64-linux.tar.gz --repo michaelbaker-dev/agentvault   # optional: proves it was built here
    tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
@@ -167,8 +168,8 @@ Restart Claude Code afterwards. `setup` connects both routes:
 
 | | Claude sees the token? | Works in |
 |---|---|---|
-| **MCP** | No. It stays in Claude Code's settings, and Claude only gets list, describe and proxy tools. | Claude Code, Claude Desktop, any MCP client |
-| **Skill + helper** | It could read `~/.config/agentvault/token`, so keep that token to list + proxy on one machine, where it can't reveal any key. | Anything with a shell |
+| **MCP** | Not directly. The token isn't in Claude Code's settings or on any command line: Claude Code asks the helper for it on each connection. A shell on this machine could still read the token file, so keep that token to list + proxy, pinned to the machine. | Claude Code, Claude Desktop, any MCP client |
+| **Skill + helper** | It could read `~/.config/agentvault/token`, so keep that token to list + proxy on one machine, where it can't reveal any key. The helper only sends the token to an https `*.ts.net` address or the one you saved. | Anything with a shell |
 
 The skill (`skill/agentvault/`) teaches Claude good habits whichever route is connected:
 - use the vault instead of asking you for keys;
@@ -265,22 +266,24 @@ Edit `/etc/agentvault/config.toml` (every option is documented in [config.exampl
 | Network | Binds only to the Tailscale IP. Rejects foreign `Host` headers (DNS rebinding) and cross-origin browser requests. |
 | Device identity | Every request is attributed to a tailnet device and user via tailscaled, which WireGuard authenticates and which can't be spoofed. |
 | Credential | Every request also needs a scoped token or the owner's web session. Device identity alone isn't enough, because an AI agent on your laptop shares the laptop's identity. |
-| Tokens | Scopes (`list`, `read`, `write`, `delete`, `proxy`), secret-name patterns (`OPENAI_*`), optional machine pinning. Only the SHA-256 is stored, and tokens are revocable instantly. |
+| Tokens | Scopes (`list`, `read`, `write`, `delete`, `proxy`), secret-name patterns (`OPENAI_*`), optional machine pinning. A pinned token remembers the device's permanent Tailscale ID on first use, so another device that later takes the same name is refused (editing the token resets it). Only the SHA-256 is stored, and tokens are revocable instantly. |
 | Web session | Owner's devices only. The passphrase is required. The cookie is `HttpOnly; Secure; SameSite=Strict`, bound to the device's stable Tailscale node ID, and every call also needs a CSRF header. Sessions expire after 15 min idle or 12 h total. |
-| Step-up | Revealing or copying a value, creating or editing a token, deleting, and changing a proxy target all need the passphrase entered in the last 5 minutes. A cookie stolen by an agent running as you can list secrets, but can't take them. |
+| Step-up | Using any key through the proxy (REST or MCP), revealing or copying a value, adding a key or changing its value, renaming, importing (preview and commit), creating or editing a token, deleting, and changing a proxy target all need the passphrase entered in the last 5 minutes when done from the web session. A cookie stolen by an agent running as you can list secrets, but can't take them, use them, or test guesses against them. Copied values are cleared from the clipboard after 45 seconds. |
 | Encryption | Passphrase → Argon2id (64 MiB) → key-encryption key → root key → a fresh XChaCha20-Poly1305 data key per value version. Each ciphertext is bound to its secret id and version. The root key lives only in memory. **Lock** wipes it. |
-| Proxy | Only the owner can change where a key is sent. Paths can't escape the provider's base URL. Only GET/POST/PUT/PATCH/DELETE are forwarded (TRACE would echo the key). The key is redacted from response bodies and headers, whether it comes back raw, base64-encoded or URL-encoded. Tokens can be limited to GET, so an agent can read through a key but can't mint new keys or change settings at the provider. Redirects aren't followed. |
+| Proxy | Only the owner can change where a key is sent, and editing a key's name or notes never changes its detected provider. Paths can't escape the provider's base URL. Only GET/POST/PUT/PATCH/DELETE are forwarded (TRACE would echo the key), and method-override and `Range` headers are stripped. The key is redacted from response bodies and headers, raw, base64-encoded (at any alignment) or URL-encoded; compressed replies are refused because they couldn't be checked. Tokens can be limited to GET requests, which stops POST/PUT/PATCH/DELETE; a few APIs do change things on GET, so GET-only is a strong limit, not a guarantee. Redirects aren't followed. |
 | Process | Not dumpable (no core dumps, and same-user processes can't read its memory). Runs as its own system user under a strict systemd sandbox. |
 | Brute force | 5 passphrase attempts per device per 15 minutes, counted before the check runs, so parallel guesses don't help. Argon2 attempts are capped at 2 concurrent. |
 | Owner-only | Secrets marked "only me" (passwords and wallet keys start that way) don't exist as far as tokens are concerned: not listed, not readable, not usable through the proxy or MCP, and not named in duplicate warnings. |
 | Owner settings | Only the owner can change who may see a secret, its linked plaintext fields, its provider, its manager, its rotation schedule or its proxy target. Exposing an owner-only secret, changing a manager or proxy, importing, rotating and undoing a rotation all need a fresh passphrase. |
 | Rotation | A key set as another's manager becomes owner-only, and rotation refuses a manager that isn't owner-only or isn't the expected kind. Tokens can't change the value of a key that rotates, renews itself or manages another, so they can't steer which key the vault creates or revokes. A rotation stops before creating anything if the old key isn't in the manager's account. Managing credentials go only to their provider's fixed API address; IDs from provider replies are checked before they go into a URL; provider error text is redacted before it's logged or shown. Revocation and undo re-check the rotation under a per-key lock and never touch a key that changed since. A rotation that fails leaves the old key in place (a Cloudflare roll, which replaces the value at once, keeps the new value). |
-| Import | Pasted text is parsed in memory. The preview shows only a public prefix and the length of each value; the values stay on the server for 30 minutes for the one device that pasted them, and are used up by the commit. |
-| Duplicates | Detected with a fingerprint keyed by the vault's root key, so the database can't be used to test password guesses. |
+| Import | Pasted text is parsed in memory. The preview shows only a public prefix and the length of each value, and anything in a label that looks like a password (after words like "password", "pass" or "pin", `user:password` pairs, mixed letters and digits) is hidden from notes and names. The values stay on the server for 30 minutes for the one device that pasted them, and are used up by the commit. |
+| Duplicates | Detected with a fingerprint keyed by the vault's root key, so the database can't be used to test password guesses, and the web session needs a fresh passphrase before it can submit values to compare. |
 
 Not covered:
 - **Root access.** Someone with root on the vault machine while it's unlocked, or at any time if automatic unlock is on.
 - **Misuse within a token's scopes.** A `proxy` token that isn't GET-only can do anything the key can do at the provider. It just can't take the key with it.
+- **Writing the database file.** Token rows, the owner-only flag and proxy targets aren't signed, so someone who can write `/var/lib/agentvault/data/agentvault.db` (root or the `agentvault` user) can change them. Values stay encrypted.
+- **`agentvault-cli run` blanking.** It catches a key, its lines and its common encodings in a program's output, to prevent accidents. A program that sets out to disguise its key can still print it.
 - **Names of owner-only secrets.** A token trying to create a secret under a name that an owner-only secret already uses gets "already exists".
 - **Clearing the audit log.** It is hash-chained but not keyed, so someone who can write the database file can rewrite it end to end, or drop the newest rows, without detection. To keep a record off the machine, periodically export the head hash shown on the Settings page.
 
