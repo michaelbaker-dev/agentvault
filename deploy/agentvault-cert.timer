@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh the keys vault's Tailscale HTTPS certificate weekly
+Description=Refresh AgentVault's Tailscale HTTPS certificate weekly
 
 [Timer]
 OnCalendar=weekly

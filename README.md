@@ -1,4 +1,4 @@
-# keys
+# AgentVault
 
 A secrets vault for your Tailscale network, in one Rust binary. Store your API keys once, then let your apps and AI agents use them over HTTPS, without copying `.env` files around and, through the proxy, without ever handing over the key.
 
@@ -44,8 +44,8 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 1. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), turn on **MagicDNS** and **HTTPS Certificates**.
 2. On the Linux machine that will hold the vault, download and install it. Use `aarch64` instead of `x86_64` on ARM:
    ```sh
-   curl -LO https://github.com/OWNER/keys/releases/latest/download/keys-x86_64-linux.tar.gz
-   tar -xzf keys-x86_64-linux.tar.gz && cd keys-x86_64-linux
+   curl -LO https://github.com/OWNER/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
+   tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
 3. Open the address it prints (`https://<machine>.<tailnet>.ts.net`) on one of your devices and choose a passphrase. Then answer **Y** in the terminal to have the vault unlock itself after a reboot.
@@ -69,18 +69,18 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 **From source:**
 
 ```sh
-git clone https://github.com/OWNER/keys && cd keys
+git clone https://github.com/OWNER/agentvault && cd agentvault
 cargo build --release
 sudo deploy/install.sh
 ```
 
 The installer checks the requirements first and tells you what to fix. It then:
-- creates a `keys` system user;
-- installs the program and writes `/etc/keys/config.toml`, listening on the machine's Tailscale address, port 443;
+- creates a `agentvault` system user;
+- installs the program and writes `/etc/agentvault/config.toml`, listening on the machine's Tailscale address, port 443;
 - gets a real HTTPS certificate from Tailscale and renews it weekly;
 - starts the hardened service and offers to turn on [automatic unlock](#unlocking-after-a-reboot).
 
-**Tagged machines.** If the machine is tagged in Tailscale, it doesn't belong to a person, so tell the installer whose vault it is: `sudo KEYS_OWNER=you@example.com ./install.sh`.
+**Tagged machines.** If the machine is tagged in Tailscale, it doesn't belong to a person, so tell the installer whose vault it is: `sudo AGENTVAULT_OWNER=you@example.com ./install.sh`.
 
 **The passphrase is the only way to decrypt the vault, and it can't be reset. Keep a copy offline.**
 
@@ -102,11 +102,11 @@ From a source checkout, it's `deploy/uninstall.sh`.
 The vault's encryption key lives only in memory, so after a restart it starts **locked**: apps get `503` until it's unlocked. You can sign in after each restart, or have it unlock itself:
 
 ```sh
-sudo /usr/local/lib/keys/auto-unlock        # asks for your passphrase, restarts the vault, checks it unlocked
-sudo /usr/local/lib/keys/auto-unlock off    # back to signing in after each restart
+sudo /usr/local/lib/agentvault/auto-unlock        # asks for your passphrase, restarts the vault, checks it unlocked
+sudo /usr/local/lib/agentvault/auto-unlock off    # back to signing in after each restart
 ```
 
-The installer offers to run this for you. The passphrase is stored as an encrypted systemd credential (`/etc/keys/passphrase.cred`). If the passphrase you type doesn't unlock the vault, the script puts everything back as it was. **Settings** shows whether automatic unlock is on. If you change your passphrase, the Secrets page warns you until you run the script again.
+The installer offers to run this for you. The passphrase is stored as an encrypted systemd credential (`/etc/agentvault/passphrase.cred`). If the passphrase you type doesn't unlock the vault, the script puts everything back as it was. **Settings** shows whether automatic unlock is on. If you change your passphrase, the Secrets page warns you until you run the script again.
 
 On a machine with a TPM security chip, systemd seals the credential to that chip. Without one, it's protected by a host key that only root can read. Either way, anyone with root on the vault machine can unlock the vault. That's the price of starting unattended.
 
@@ -115,7 +115,7 @@ On a machine with a TPM security chip, systemd seals the credential to that chip
 Open **Import** and paste a file or choose one. Click **Preview**, check the names and fill in anything marked "Also needs", then click **Import selected**. To see what would happen without running a server:
 
 ```sh
-keys import-preview keys.txt     # every value masked; nothing stored or sent
+agentvault import-preview keys.txt     # every value masked; nothing stored or sent
 ```
 
 Afterwards, delete the file everywhere it exists (`shred -u keys.txt`). Then replace the exposed keys from the **Rotation** page, or press **OK** on the ones you accept the risk for.
@@ -145,13 +145,13 @@ When a key is due by its schedule, the scheduler rotates it while the vault is u
 Create a token on the **Tokens** page and pick the narrowest preset that works. You can change a token's permissions later with **Edit**, without replacing it. Keep the token in a file or a secrets manager, not on a command line:
 
 ```sh
-read -rs KEYS_TOKEN && export KEYS_TOKEN      # paste the token; it isn't shown or saved in your history
+read -rs AGENTVAULT_TOKEN && export AGENTVAULT_TOKEN      # paste the token; it isn't shown or saved in your history
 
 # an app that needs the raw value
-curl -s -H "Authorization: Bearer $KEYS_TOKEN" https://HOST/v1/secrets/DB_PASSWORD/value
+curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" https://HOST/v1/secrets/DB_PASSWORD/value
 
 # call a provider without ever holding its key
-curl -s -H "Authorization: Bearer $KEYS_TOKEN" https://HOST/v1/proxy/OPENAI_API_KEY/v1/models
+curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" https://HOST/v1/proxy/OPENAI_API_KEY/v1/models
 ```
 
 ### From Claude: MCP, a skill, or both
@@ -159,8 +159,8 @@ curl -s -H "Authorization: Bearer $KEYS_TOKEN" https://HOST/v1/proxy/OPENAI_API_
 Make a token with the preset **Claude / agents** (list + proxy, GET-only), tied to the machine Claude runs on. Then, in your own terminal:
 
 ```sh
-ln -s "$PWD/skill/keys-vault" ~/.claude/skills/keys-vault   # the skill (once per machine)
-~/.claude/skills/keys-vault/scripts/keys-cli setup          # asks for the token without showing it, checks it, saves it, connects MCP
+ln -s "$PWD/skill/agentvault" ~/.claude/skills/agentvault   # the skill (once per machine)
+~/.claude/skills/agentvault/scripts/agentvault-cli setup          # asks for the token without showing it, checks it, saves it, connects MCP
 ```
 
 Restart Claude Code afterwards. `setup` connects both routes:
@@ -168,23 +168,23 @@ Restart Claude Code afterwards. `setup` connects both routes:
 | | Claude sees the token? | Works in |
 |---|---|---|
 | **MCP** | No. It stays in Claude Code's settings, and Claude only gets list, describe and proxy tools. | Claude Code, Claude Desktop, any MCP client |
-| **Skill + helper** | It could read `~/.config/keys/token`, so keep that token to list + proxy on one machine, where it can't reveal any key. | Anything with a shell |
+| **Skill + helper** | It could read `~/.config/agentvault/token`, so keep that token to list + proxy on one machine, where it can't reveal any key. | Anything with a shell |
 
-The skill (`skill/keys-vault/`) teaches Claude good habits whichever route is connected:
+The skill (`skill/agentvault/`) teaches Claude good habits whichever route is connected:
 - use the vault instead of asking you for keys;
 - prefer the proxy;
 - keep keys out of code, `.env` files and commits;
 - make apps fetch keys at runtime.
 
-It also brings a helper, `skill/keys-vault/scripts/keys-cli` (Python, standard library only), which works on its own too:
+It also brings a helper, `skill/agentvault/scripts/agentvault-cli` (Python, standard library only), which works on its own too:
 
 ```sh
-keys-cli setup                                 # address + token, checked; connects MCP (--no-mcp to skip)
-keys-cli check                                 # reachable, unlocked, token works?
-keys-cli list [word]                           # keys this token may use; no values
-keys-cli describe GITHUB_TOKEN                 # what it's for, risk, proxy address
-keys-cli call GITHUB_TOKEN /user               # call the provider through the vault
-keys-cli run OPENAI_API_KEY -- python app.py   # program gets the key; output has it blanked (needs read scope)
+agentvault-cli setup                                 # address + token, checked; connects MCP (--no-mcp to skip)
+agentvault-cli check                                 # reachable, unlocked, token works?
+agentvault-cli list [word]                           # keys this token may use; no values
+agentvault-cli describe GITHUB_TOKEN                 # what it's for, risk, proxy address
+agentvault-cli call GITHUB_TOKEN /user               # call the provider through the vault
+agentvault-cli run OPENAI_API_KEY -- python app.py   # program gets the key; output has it blanked (needs read scope)
 ```
 
 ### Descriptions written by Claude
@@ -225,37 +225,37 @@ Secrets made of several parts carry `extras: [{name, value}]` (encrypted) and `f
 
 ### Back up and restore
 
-Everything is in one database file, `/var/lib/keys/data/keys.db`. The values inside it are encrypted, so a copy is safe to store anywhere, but it's useless without your passphrase.
+Everything is in one database file, `/var/lib/agentvault/data/agentvault.db`. The values inside it are encrypted, so a copy is safe to store anywhere, but it's useless without your passphrase.
 
 ```sh
 # back up (the vault restarts; with automatic unlock it unlocks itself)
-sudo systemctl stop keys
-sudo cp /var/lib/keys/data/keys.db ~/keys-backup-$(date +%F).db
-sudo systemctl start keys
+sudo systemctl stop agentvault
+sudo cp /var/lib/agentvault/data/agentvault.db ~/agentvault-backup-$(date +%F).db
+sudo systemctl start agentvault
 
 # restore
-sudo systemctl stop keys
-sudo install -o keys -g keys -m 0600 ~/keys-backup-YYYY-MM-DD.db /var/lib/keys/data/keys.db
-sudo rm -f /var/lib/keys/data/keys.db-wal /var/lib/keys/data/keys.db-shm
-sudo systemctl start keys
+sudo systemctl stop agentvault
+sudo install -o agentvault -g agentvault -m 0600 ~/agentvault-backup-YYYY-MM-DD.db /var/lib/agentvault/data/agentvault.db
+sudo rm -f /var/lib/agentvault/data/agentvault.db-wal /var/lib/agentvault/data/agentvault.db-shm
+sudo systemctl start agentvault
 ```
 
-A backup opens with the passphrase that was in use **when it was taken**. If automatic unlock has a newer passphrase, sign in with the old one, then run `sudo /usr/local/lib/keys/auto-unlock` again.
+A backup opens with the passphrase that was in use **when it was taken**. If automatic unlock has a newer passphrase, sign in with the old one, then run `sudo /usr/local/lib/agentvault/auto-unlock` again.
 
 ### Change the address or port
 
-Edit `/etc/keys/config.toml` (every option is documented in [config.example.toml](config.example.toml)), then run `sudo systemctl restart keys`. For example, `listen = "100.x.y.z:8443"` moves the vault to `https://<machine>.<tailnet>.ts.net:8443`.
+Edit `/etc/agentvault/config.toml` (every option is documented in [config.example.toml](config.example.toml)), then run `sudo systemctl restart agentvault`. For example, `listen = "100.x.y.z:8443"` moves the vault to `https://<machine>.<tailnet>.ts.net:8443`.
 
 ### Troubleshooting
 
 | Problem | What to check |
 |---|---|
-| Can't reach the vault | Is your device on the same tailnet? On the vault machine: `systemctl status keys` and `journalctl -u keys -n 50`. |
+| Can't reach the vault | Is your device on the same tailnet? On the vault machine: `systemctl status agentvault` and `journalctl -u agentvault -n 50`. |
 | Apps get `503` / "vault is locked" | It restarted and isn't unlocked. Sign in, or turn on [automatic unlock](#unlocking-after-a-reboot). |
-| Certificate warnings in the browser | Run `sudo systemctl start keys-cert` and check HTTPS Certificates is on in the Tailscale admin console. |
+| Certificate warnings in the browser | Run `sudo systemctl start agentvault-cert` and check HTTPS Certificates is on in the Tailscale admin console. |
 | "Only the owner's devices can sign in" | Only devices logged in to Tailscale as the owner (`owner` in the config) can sign in. Others use tokens. |
 | A token gets `403` | It lacks a scope, the key isn't in its list, or it's used from another machine. Fix it with **Edit** on the Tokens page. |
-| Automatic unlock stopped working | You changed your passphrase. Run `sudo /usr/local/lib/keys/auto-unlock` again. |
+| Automatic unlock stopped working | You changed your passphrase. Run `sudo /usr/local/lib/agentvault/auto-unlock` again. |
 | Forgot the passphrase | It can't be recovered or reset. Restore won't help either; start over with `uninstall.sh --purge`. |
 
 ## Security model
@@ -299,7 +299,7 @@ cargo test                                  # 78 tests: crypto, auth, tokens, CS
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo deny check                            # advisories, licenses, sources
 gitleaks dir .                              # no secrets in the tree
-keys audit-verify -c /etc/keys/config.toml  # on the vault machine: is the hash chain intact?
+agentvault audit-verify -c /etc/agentvault/config.toml  # on the vault machine: is the hash chain intact?
 ```
 
 CI runs all of these on every push. Pushing a tag such as `v0.1.0` builds the release downloads. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved and [CHANGELOG.md](CHANGELOG.md) for what changed.

@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck -S error deploy/install.sh deploy/uninstall.sh deploy/auto-unlock deploy/refresh-cert
-      - run: python3 -m py_compile skill/keys-vault/scripts/keys-cli
+      - run: python3 -m py_compile skill/agentvault/scripts/agentvault-cli
 
   secrets:
     name: No secrets committed

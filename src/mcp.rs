@@ -127,7 +127,7 @@ pub async fn handle(State(app): State<AppRef>, Extension(caller): Extension<Call
                 json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
-                    "serverInfo": { "name": "keys", "title": "Keys vault", "version": env!("CARGO_PKG_VERSION") },
+                    "serverInfo": { "name": "agentvault", "title": "AgentVault", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": INSTRUCTIONS,
                 }),
             )

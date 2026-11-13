@@ -46,7 +46,7 @@ use crate::identity::Resolver;
 use crate::vault::Vault;
 
 #[derive(Parser)]
-#[command(version, about = "Secrets vault for your tailnet")]
+#[command(version, about = "AgentVault: a secrets vault for your tailnet")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -160,7 +160,7 @@ async fn serve(cfg: Config) -> Result<(), String> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(180))
-        .user_agent(concat!("keys-vault/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("agentvault/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| format!("building HTTP client: {e}"))?;
 
@@ -210,7 +210,7 @@ async fn serve(cfg: Config) -> Result<(), String> {
             Err(e) => {
                 app.auto_unlock.set(AutoUnlock::FAILED);
                 tracing::warn!(
-                    "automatic unlock failed: {e}. Sign in to unlock, then run `sudo /usr/local/lib/keys/auto-unlock` to store the current passphrase"
+                    "automatic unlock failed: {e}. Sign in to unlock, then run `sudo /usr/local/lib/agentvault/auto-unlock` to store the current passphrase"
                 );
             }
         }
@@ -260,7 +260,7 @@ async fn serve(cfg: Config) -> Result<(), String> {
     }
 
     let router = server::router(app.clone());
-    tracing::info!("keys listening on {} ({})", cfg.listen, app.origin);
+    tracing::info!("agentvault listening on {} ({})", cfg.listen, app.origin);
     axum_server::bind_rustls(cfg.listen, tls)
         .serve(router.into_make_service_with_connect_info::<SocketAddr>())
         .await

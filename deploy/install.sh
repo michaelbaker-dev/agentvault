@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installs keys as a hardened system service, or upgrades an existing install
+# Installs agentvault as a hardened system service, or upgrades an existing install
 # (your config, data and automatic-unlock setting are kept).
 #
 #   From source:            cargo build --release && sudo deploy/install.sh
-#   From a release archive: sudo ./install.sh        (the keys binary sits next to it)
+#   From a release archive: sudo ./install.sh        (the agentvault binary sits next to it)
 #
-# Tagged machine? Tell it whose vault it is: sudo KEYS_OWNER=you@example.com deploy/install.sh
+# Tagged machine? Tell it whose vault it is: sudo AGENTVAULT_OWNER=you@example.com deploy/install.sh
 set -eu
 fail() { printf '\n%s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail "Run it with sudo."
@@ -13,10 +13,10 @@ cd "$(dirname "$0")"
 [ -d deploy ] || [ ! -d ../deploy ] || cd ..
 
 # ---- the program
-if [ -n "${KEYS_BIN:-}" ]; then BIN=$KEYS_BIN
-elif [ -x target/release/keys ]; then BIN=target/release/keys
-elif [ -x ./keys ] && [ ! -d ./keys ]; then BIN=./keys
-else fail "No keys program found. Build it first (cargo build --release), or run this from an unpacked release."
+if [ -n "${AGENTVAULT_BIN:-}" ]; then BIN=$AGENTVAULT_BIN
+elif [ -x target/release/agentvault ]; then BIN=target/release/agentvault
+elif [ -x ./agentvault ] && [ ! -d ./agentvault ]; then BIN=./agentvault
+else fail "No agentvault program found. Build it first (cargo build --release), or run this from an unpacked release."
 fi
 DEPLOY=deploy; [ -d deploy ] || DEPLOY=.
 
@@ -33,54 +33,80 @@ HOST=$(py 'print((d["Self"].get("DNSName") or "").rstrip("."))')
 [ -n "$(py 'print(" ".join(d.get("CertDomains") or []))')" ] || fail "HTTPS certificates are off for your tailnet. Turn them on under
 'HTTPS Certificates' at https://login.tailscale.com/admin/dns (see https://tailscale.com/kb/1153/enabling-https)."
 IP=$(py 'print([a for a in d["Self"]["TailscaleIPs"] if "." in a][0])')
-if [ -n "${KEYS_OWNER:-}" ]; then OWNER=$KEYS_OWNER
+if [ -n "${AGENTVAULT_OWNER:-${KEYS_OWNER:-}}" ]; then OWNER=${AGENTVAULT_OWNER:-$KEYS_OWNER}
 else
   OWNER=$(py 'print(d["User"][str(d["Self"]["UserID"])]["LoginName"])')
   case $OWNER in *@*) ;; *)
     fail "This machine is tagged, so Tailscale can't say whose vault it is. Run it again with your Tailscale login:
-  sudo KEYS_OWNER=you@example.com $0" ;;
+  sudo AGENTVAULT_OWNER=you@example.com $0" ;;
   esac
 fi
-if [ ! -f /etc/keys/config.toml ] && ! systemctl is-active --quiet keys 2>/dev/null; then
+# ---- move an install from before the rename (keys -> agentvault)
+# Same vault, passphrase, tokens and automatic unlock; only names and paths change.
+if [ -f /etc/keys/config.toml ] && [ ! -e /etc/agentvault ]; then
+  echo "Moving your existing vault from the old 'keys' install to agentvault..."
+  systemctl disable --now keys keys-cert.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/keys.service /etc/systemd/system/keys-cert.service /etc/systemd/system/keys-cert.timer
+  systemctl daemon-reload
+  id agentvault >/dev/null 2>&1 || useradd --system --home-dir /var/lib/agentvault --shell /usr/sbin/nologin agentvault
+  mv /etc/keys /etc/agentvault
+  if [ -d /var/lib/keys ]; then
+    mv /var/lib/keys /var/lib/agentvault
+    for ext in "" -wal -shm; do
+      if [ -f "/var/lib/agentvault/data/keys.db$ext" ]; then
+        mv "/var/lib/agentvault/data/keys.db$ext" "/var/lib/agentvault/data/agentvault.db$ext"
+      fi
+    done
+    chown -R agentvault:agentvault /var/lib/agentvault
+  fi
+  sed -i 's#/var/lib/keys/#/var/lib/agentvault/#g; s/^# keys configuration/# agentvault configuration/' /etc/agentvault/config.toml
+  chgrp agentvault /etc/agentvault /etc/agentvault/config.toml
+  rm -f /usr/local/bin/keys
+  rm -rf /usr/local/lib/keys /opt/keys
+  userdel keys 2>/dev/null || true
+  echo "Moved. Your vault is now in /var/lib/agentvault and its settings in /etc/agentvault."
+fi
+
+if [ ! -f /etc/agentvault/config.toml ] && ! systemctl is-active --quiet agentvault 2>/dev/null; then
   if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "^(\*|0\.0\.0\.0|\[::\]|$IP):443$"; then
-    fail "Something already listens on port 443 here. Stop it, or install, then change 'listen' in /etc/keys/config.toml to another port."
+    fail "Something already listens on port 443 here. Stop it, or install, then change 'listen' in /etc/agentvault/config.toml to another port."
   fi
 fi
 
-id keys >/dev/null 2>&1 || useradd --system --home-dir /var/lib/keys --shell /usr/sbin/nologin keys
-install -m 0755 "$BIN" /usr/local/bin/keys
-install -d -m 0755 /usr/local/lib/keys /opt/keys
-install -m 0755 "$DEPLOY"/refresh-cert /usr/local/lib/keys/refresh-cert
-install -m 0755 "$DEPLOY"/auto-unlock /usr/local/lib/keys/auto-unlock
-[ -f README.md ] && install -m 0644 README.md /opt/keys/README.md
-install -d -m 0750 -g keys /etc/keys
-if [ ! -f /etc/keys/config.toml ]; then
-  cat > /etc/keys/config.toml <<CONF
-# keys configuration. See config.example.toml for every option.
+id agentvault >/dev/null 2>&1 || useradd --system --home-dir /var/lib/agentvault --shell /usr/sbin/nologin agentvault
+install -m 0755 "$BIN" /usr/local/bin/agentvault
+install -d -m 0755 /usr/local/lib/agentvault /opt/agentvault
+install -m 0755 "$DEPLOY"/refresh-cert /usr/local/lib/agentvault/refresh-cert
+install -m 0755 "$DEPLOY"/auto-unlock /usr/local/lib/agentvault/auto-unlock
+[ -f README.md ] && install -m 0644 README.md /opt/agentvault/README.md
+install -d -m 0750 -g agentvault /etc/agentvault
+if [ ! -f /etc/agentvault/config.toml ]; then
+  cat > /etc/agentvault/config.toml <<CONF
+# agentvault configuration. See config.example.toml for every option.
 listen = "$IP:443"
 hostname = "$HOST"
 owner = "$OWNER"
-data_dir = "/var/lib/keys/data"
+data_dir = "/var/lib/agentvault/data"
 
 [tls]
-cert_file = "/var/lib/keys/tls/cert.pem"
-key_file = "/var/lib/keys/tls/key.pem"
+cert_file = "/var/lib/agentvault/tls/cert.pem"
+key_file = "/var/lib/agentvault/tls/key.pem"
 CONF
-  chgrp keys /etc/keys/config.toml && chmod 0640 /etc/keys/config.toml
+  chgrp agentvault /etc/agentvault/config.toml && chmod 0640 /etc/agentvault/config.toml
 fi
-install -m 0644 "$DEPLOY"/keys.service "$DEPLOY"/keys-cert.service "$DEPLOY"/keys-cert.timer /etc/systemd/system/
+install -m 0644 "$DEPLOY"/agentvault.service "$DEPLOY"/agentvault-cert.service "$DEPLOY"/agentvault-cert.timer /etc/systemd/system/
 # Reinstalling or upgrading keeps automatic unlock on if it was.
-if [ -f /etc/keys/passphrase.cred ]; then
-  sed -i 's/^#LoadCredentialEncrypted=/LoadCredentialEncrypted=/' /etc/systemd/system/keys.service
+if [ -f /etc/agentvault/passphrase.cred ]; then
+  sed -i 's/^#LoadCredentialEncrypted=/LoadCredentialEncrypted=/' /etc/systemd/system/agentvault.service
 fi
 systemctl daemon-reload
-systemctl enable --now keys-cert.timer
-systemctl enable keys
-systemctl restart keys
+systemctl enable --now agentvault-cert.timer
+systemctl enable agentvault
+systemctl restart agentvault
 sleep 2
-systemctl --no-pager --lines=5 status keys || true
+systemctl --no-pager --lines=5 status agentvault || true
 echo
-if [ -f /etc/keys/passphrase.cred ]; then
+if [ -f /etc/agentvault/passphrase.cred ]; then
   echo "Done. The vault unlocks itself at https://$HOST"
   exit 0
 fi
@@ -90,11 +116,11 @@ if [ -t 0 ]; then
   printf 'Unlock the vault automatically after a reboot? [Y/n] '
   read -r ANSWER
   case $ANSWER in [nN]*)
-    echo "OK: sign in after each restart to unlock it. To change your mind: sudo /usr/local/lib/keys/auto-unlock"
+    echo "OK: sign in after each restart to unlock it. To change your mind: sudo /usr/local/lib/agentvault/auto-unlock"
     exit 0 ;;
   esac
   printf 'Set your passphrase in the browser first, then press Enter here. '
   read -r _
-  exec /usr/local/lib/keys/auto-unlock
+  exec /usr/local/lib/agentvault/auto-unlock
 fi
-echo "To unlock automatically after a reboot, then run: sudo /usr/local/lib/keys/auto-unlock"
+echo "To unlock automatically after a reboot, then run: sudo /usr/local/lib/agentvault/auto-unlock"

@@ -18,8 +18,8 @@ use crate::db::{SecretMeta, TokenRow};
 use crate::identity::Caller;
 
 pub const TOKEN_PREFIX: &str = "kt_";
-pub const SESSION_COOKIE: &str = "__Host-keys_session";
-pub const CSRF_HEADER: &str = "x-keys-csrf";
+pub const SESSION_COOKIE: &str = "__Host-agentvault_session";
+pub const CSRF_HEADER: &str = "x-agentvault-csrf";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

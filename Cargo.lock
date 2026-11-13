@@ -13,6 +13,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentvault"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "aws-lc-rs",
+ "axum",
+ "axum-server",
+ "base64",
+ "bytes",
+ "chacha20poly1305",
+ "clap",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hex",
+ "libc",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "rpassword",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -997,40 +1031,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "keys"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "aws-lc-rs",
- "axum",
- "axum-server",
- "base64",
- "bytes",
- "chacha20poly1305",
- "clap",
- "futures-util",
- "getrandom 0.4.3",
- "hex",
- "libc",
- "percent-encoding",
- "regex",
- "reqwest",
- "rpassword",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tokio",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
- "url",
- "zeroize",
 ]
 
 [[package]]

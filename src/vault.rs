@@ -12,6 +12,8 @@ use zeroize::Zeroizing;
 use crate::crypto::{self, KdfParams, KeyBytes};
 use crate::db::Db;
 
+// These "keys/..." labels predate the rename to agentvault. They are bound into
+// every stored ciphertext, so changing them would make existing vaults unreadable.
 const ROOT_AAD: &[u8] = b"keys/root/v1";
 
 #[derive(Debug)]

@@ -1,4 +1,4 @@
-# keys configuration. `deploy/install.sh` writes /etc/keys/config.toml for you;
+# AgentVault configuration. `deploy/install.sh` writes /etc/agentvault/config.toml for you;
 # this file documents every option.
 
 # Listen on this machine's Tailscale IP only, so nothing off the tailnet can connect.
@@ -10,7 +10,7 @@ hostname = "vault.your-tailnet.ts.net"
 # Tailscale login allowed to set up the vault and sign in to the web interface.
 owner = "you@example.com"
 
-data_dir = "/var/lib/keys/data"
+data_dir = "/var/lib/agentvault/data"
 
 # tailscale_socket = "/var/run/tailscale/tailscaled.sock"
 
@@ -18,8 +18,8 @@ data_dir = "/var/lib/keys/data"
 # event_retention_days = 365
 
 [tls]
-cert_file = "/var/lib/keys/tls/cert.pem"
-key_file = "/var/lib/keys/tls/key.pem"
+cert_file = "/var/lib/agentvault/tls/cert.pem"
+key_file = "/var/lib/agentvault/tls/key.pem"
 # Run `tailscale cert` from the server itself (needs `tailscale set --operator`).
 # The systemd units refresh the certificate as root instead, so leave this off.
 # renew_with_tailscale = false
@@ -37,7 +37,7 @@ key_file = "/var/lib/keys/tls/key.pem"
 [unlock]
 # Unattended unlock at boot. Anyone who can read this file can unlock the
 # vault, so prefer the systemd credential described in the README.
-# passphrase_file = "/etc/keys/passphrase"
+# passphrase_file = "/etc/agentvault/passphrase"
 
 [rotation]
 # Rotate keys automatically when their schedule says so. Only keys whose

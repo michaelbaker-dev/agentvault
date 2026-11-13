@@ -21,7 +21,7 @@ use crate::timeutil::parse_time;
 
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(120);
-const ACTOR: &str = "keys (describer)";
+const ACTOR: &str = "agentvault (describer)";
 
 /// Describes version `version` of secret `id`. The result is discarded if the
 /// value changes again before this finishes.

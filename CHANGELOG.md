@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-First public version.
+First public version, as AgentVault (developed under the working name "keys").
 
 - Encrypted vault (Argon2id + XChaCha20-Poly1305) reachable only over Tailscale, with a web interface, REST API, MCP endpoint and key-attaching proxy.
 - Provider recognition and checks for 48 providers, with optional descriptions written by Claude from metadata only.
@@ -16,4 +16,4 @@ First public version.
 - A "Needs attention" list that you can OK until the situation changes.
 - Dashboard of usage and latency; hash-chained audit log.
 - Installer with prerequisite checks, systemd hardening, Tailscale certificates and verified automatic unlock; uninstaller.
-- `keys-vault` Claude skill and `keys-cli` helper.
+- `agentvault` Claude skill and `agentvault-cli` helper.

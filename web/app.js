@@ -95,7 +95,7 @@
 
   async function api(method, path, body, retried) {
     const opt = { method, headers: {}, credentials: "same-origin", cache: "no-store" };
-    if (S.csrf) opt.headers["x-keys-csrf"] = S.csrf;
+    if (S.csrf) opt.headers["x-agentvault-csrf"] = S.csrf;
     if (body !== undefined) {
       opt.headers["content-type"] = "application/json";
       opt.body = JSON.stringify(body);
@@ -254,7 +254,7 @@
     const header = h(
       "header",
       { class: "top" },
-      h("div", { class: "brand" }, h("img", { src: "/favicon.svg", alt: "", width: 22, height: 22 }), "Keys"),
+      h("div", { class: "brand" }, h("img", { src: "/favicon.svg", alt: "", width: 22, height: 22 }), "AgentVault"),
       h("nav", { class: "tabs", "aria-label": "Sections" }, tabs),
       h(
         "div",
@@ -568,7 +568,7 @@
     }
   }
 
-  const AUTO_UNLOCK_CMD = "sudo /usr/local/lib/keys/auto-unlock";
+  const AUTO_UNLOCK_CMD = "sudo /usr/local/lib/agentvault/auto-unlock";
   // Shown when the vault won't unlock itself after the next restart.
   function autoUnlockNote() {
     const a = S.status.auto_unlock;
@@ -1840,15 +1840,15 @@
     const origin = S.status.origin;
     const tok = r.token;
     // No command below contains the token: a token typed on a command line
-    // ends up in shell history. Each one asks for it or reads $KEYS_TOKEN.
+    // ends up in shell history. Each one asks for it or reads $AGENTVAULT_TOKEN.
     const lines = [];
     if (r.scopes.includes("list") || r.scopes.includes("proxy")) {
-      lines.push(["Claude Code (MCP and the keys-vault skill): run this, then paste the token when it asks", "~/.claude/skills/keys-vault/scripts/keys-cli setup"]);
+      lines.push(["Claude Code (MCP and the agentvault skill): run this, then paste the token when it asks", "~/.claude/skills/agentvault/scripts/agentvault-cli setup"]);
     }
-    const env = ["In scripts and apps, read the token from the environment, e.g. after: read -rs KEYS_TOKEN; export KEYS_TOKEN", null];
-    if (r.scopes.includes("read")) lines.push(["Fetch a value", `curl -s -H "Authorization: Bearer $KEYS_TOKEN" \\\n  ${origin}/v1/secrets/NAME/value`]);
-    if (r.scopes.includes("proxy")) lines.push(["Call a provider through the proxy", `curl -s -H "Authorization: Bearer $KEYS_TOKEN" \\\n  ${origin}/v1/proxy/OPENAI_API_KEY/v1/models`]);
-    if (r.scopes.includes("list")) lines.push(["List secrets", `curl -s -H "Authorization: Bearer $KEYS_TOKEN" ${origin}/v1/secrets`]);
+    const env = ["In scripts and apps, read the token from the environment, e.g. after: read -rs AGENTVAULT_TOKEN; export AGENTVAULT_TOKEN", null];
+    if (r.scopes.includes("read")) lines.push(["Fetch a value", `curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" \\\n  ${origin}/v1/secrets/NAME/value`]);
+    if (r.scopes.includes("proxy")) lines.push(["Call a provider through the proxy", `curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" \\\n  ${origin}/v1/proxy/OPENAI_API_KEY/v1/models`]);
+    if (r.scopes.includes("list")) lines.push(["List secrets", `curl -s -H "Authorization: Bearer $AGENTVAULT_TOKEN" ${origin}/v1/secrets`]);
     if (lines.some(([, c]) => c.startsWith("curl"))) lines.splice(lines.findIndex(([, c]) => c.startsWith("curl")), 0, env);
     const copy = (text) => navigator.clipboard.writeText(text).then(() => toast("Copied."), () => toast("Couldn't copy", true));
     return h(

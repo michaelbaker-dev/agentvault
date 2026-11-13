@@ -181,7 +181,7 @@ impl IntoResponse for ApiError {
         let mut r = (self.status, Json(json!({ "error": self.msg }))).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
             r.headers_mut()
-                .insert(header::WWW_AUTHENTICATE, "Bearer realm=\"keys\"".parse().expect("static"));
+                .insert(header::WWW_AUTHENTICATE, "Bearer realm=\"agentvault\"".parse().expect("static"));
         }
         if let Some(ev) = self.event {
             r.extensions_mut().insert(*ev);
@@ -304,9 +304,9 @@ impl App {
         let me = Caller {
             ip: self.cfg.listen.ip(),
             node_id: "server".into(),
-            node: format!("{} (server)", self.cfg.hostname.split('.').next().unwrap_or("keys")),
+            node: format!("{} (server)", self.cfg.hostname.split('.').next().unwrap_or("agentvault")),
             node_fqdn: self.cfg.hostname.clone(),
-            user: "keys".into(),
+            user: "agentvault".into(),
             tags: vec![],
         };
         self.record(&me, ev, status, latency);

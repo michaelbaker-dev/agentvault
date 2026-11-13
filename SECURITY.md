@@ -1,6 +1,6 @@
 # Security policy
 
-keys holds other people's credentials, so security reports are the most useful contribution there is.
+AgentVault holds other people's credentials, so security reports are the most useful contribution there is.
 
 ## Reporting a vulnerability
 

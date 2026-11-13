@@ -559,14 +559,14 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("authorization", "Bearer kt_mine".parse().unwrap());
         h.insert("cookie", "a=b".parse().unwrap());
-        h.insert("x-keys-csrf", "c".parse().unwrap());
+        h.insert("x-agentvault-csrf", "c".parse().unwrap());
         h.insert("content-type", "application/json".parse().unwrap());
         h.insert("anthropic-version", "2023-06-01".parse().unwrap());
         h.insert("apca-api-key-id", "client-sent".parse().unwrap());
         let out = forward_request_headers(&h, &Auth::Header("x-api-key".into()));
         assert!(out.get("authorization").is_none());
         assert!(out.get("cookie").is_none());
-        assert!(out.get("x-keys-csrf").is_none());
+        assert!(out.get("x-agentvault-csrf").is_none());
         assert!(out.get("content-type").is_some());
         assert!(out.get("anthropic-version").is_some());
         let two = Auth::parse("headers:APCA-API-KEY-ID={key_id};APCA-API-SECRET-KEY={value}").unwrap();

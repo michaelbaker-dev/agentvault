@@ -32,7 +32,7 @@ use crate::timeutil;
 const DAY_MS: i64 = 86_400_000;
 const HOUR_MS: i64 = 3_600_000;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
-pub const ACTOR_SCHEDULER: &str = "keys (scheduler)";
+pub const ACTOR_SCHEDULER: &str = "agentvault (scheduler)";
 
 /// Provider API addresses. Tests point them at a local fake.
 #[derive(Clone)]
@@ -377,7 +377,9 @@ pub async fn proxy_material(app: &AppRef, meta: &SecretMeta, stored: &Material) 
         "slack" => mint_slack(app, &meta, &stored).await,
         other => Err(format!("unknown minter {other}")),
     };
-    let ev = EventInfo::new("mint", "keys (proxy)").secret(&meta.name).upstream(start.elapsed());
+    let ev = EventInfo::new("mint", "agentvault (proxy)")
+        .secret(&meta.name)
+        .upstream(start.elapsed());
     match r {
         Ok((token, version, ttl)) => {
             app.record_internal(ev.detail(kind), 200, start.elapsed());
@@ -412,7 +414,7 @@ async fn mint_github(app: &AppRef, meta: &SecretMeta, m: &Material) -> Result<Mi
         .bearer_auth(jwt.as_str())
         .header("accept", "application/vnd.github+json")
         .header("x-github-api-version", "2022-11-28")
-        .header("user-agent", "keys-vault");
+        .header("user-agent", "agentvault");
     let v = send_json(rb, "GitHub installation token", &[jwt.as_str()]).await?;
     let token = Zeroizing::new(str_at(&v, "/token", "GitHub")?.to_string());
     let ttl = v
@@ -831,7 +833,7 @@ async fn azure_create(c: &Ctx<'_>) -> Result<Created, String> {
     let app_id = safe_seg(field(c.meta, "client_id")?)?;
     let days = c.meta.rotate_every_days.unwrap_or(180).clamp(30, 365) * 2;
     let body = json!({ "passwordCredential": {
-        "displayName": format!("keys vault {}", timeutil::format_date(now_ms())),
+        "displayName": format!("agentvault {}", timeutil::format_date(now_ms())),
         "endDateTime": timeutil::format_rfc3339(now_ms() + days * DAY_MS),
     }});
     let rb = c

@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Use the keys vault from a shell, without the key values passing through you.
+"""Use AgentVault from a shell, without the key values passing through you.
 
-  keys-cli setup                      save the vault address and a token (asked for without
-                                      showing it), check them, and connect Claude Code's MCP
-  keys-cli check                      is the vault reachable, unlocked, and the token working?
-  keys-cli list [WORD]                keys this token may use (no values)
-  keys-cli describe NAME              what one key is for, its risk, and how the proxy reaches it
-  keys-cli call NAME PATH [options]   call the key's provider through the vault's proxy
+  agentvault-cli setup                      save the vault address and a token (asked for without
+                                            showing it), check them, and connect Claude Code's MCP
+  agentvault-cli check                      is the vault reachable, unlocked, and the token working?
+  agentvault-cli list [WORD]                keys this token may use (no values)
+  agentvault-cli describe NAME              what one key is for, its risk, and how the proxy reaches it
+  agentvault-cli call NAME PATH [options]   call the key's provider through the vault's proxy
       -X METHOD   -q 'a=1&b=2'   -H 'Name: value'   -d '{"json": 1}' | -d @file
-  keys-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]
-                                      run COMMAND with keys in its environment; the values
-                                      are blanked out of its output (needs the read scope)
+  agentvault-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]
+                                            run COMMAND with keys in its environment; the values
+                                            are blanked out of its output (needs the read scope)
 
-Settings: KEYS_URL or ~/.config/keys/url; the token in ~/.config/keys/token
-(or the file named by KEYS_TOKEN_FILE). Standard library only.
+Settings: AGENTVAULT_URL or ~/.config/agentvault/url; the token in
+~/.config/agentvault/token (or the file named by AGENTVAULT_TOKEN_FILE).
+Setups from before the rename (~/.config/keys, KEYS_*) keep working.
+Standard library only.
 """
 import getpass
 import json
@@ -27,12 +29,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CONF = os.path.expanduser("~/.config/keys")
+NEW_CONF = CONF = os.path.expanduser("~/.config/agentvault")
+# Before the rename to agentvault, settings lived in ~/.config/keys.
+_OLD = os.path.expanduser("~/.config/keys")
+if not os.path.exists(CONF) and os.path.exists(_OLD):
+    CONF = _OLD
+
+
+def env(name):
+    """AGENTVAULT_<name>, or the KEYS_<name> used before the rename."""
+    return os.environ.get(f"AGENTVAULT_{name}") or os.environ.get(f"KEYS_{name}")
 MAX_SHOW = 100_000
 
-SETUP = f"""The keys vault isn't set up for this shell yet. The owner should, in their own terminal:
+SETUP = f"""AgentVault isn't set up for this shell yet. The owner should, in their own terminal:
   1. Create a token in the vault's web interface (Tokens > preset "Claude / agents"; add the
-     read scope only if programs should get raw values through `keys-cli run`).
+     read scope only if programs should get raw values through `agentvault-cli run`).
   2. mkdir -p {CONF} && echo https://VAULT-HOST > {CONF}/url
   3. (umask 077; cat > {CONF}/token)   then paste the token, press Enter and Ctrl-D.
 Never paste the token into a chat."""
@@ -44,10 +55,10 @@ def die(msg, code=1):
 
 
 def settings():
-    url = os.environ.get("KEYS_URL")
+    url = env("URL")
     if not url and os.path.exists(f"{CONF}/url"):
         url = open(f"{CONF}/url").read().strip()
-    token_file = os.environ.get("KEYS_TOKEN_FILE", f"{CONF}/token")
+    token_file = env("TOKEN_FILE") or f"{CONF}/token"
     token = open(token_file).read().strip() if os.path.exists(token_file) else ""
     if not url or not token:
         die(SETUP)
@@ -55,7 +66,7 @@ def settings():
 
 
 def ssl_context():
-    ca = os.environ.get("KEYS_CA_FILE")  # only for test vaults with their own certificate
+    ca = env("CA_FILE")  # only for test vaults with their own certificate
     return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
 
 
@@ -133,7 +144,7 @@ def cmd_list(args):
 
 def cmd_describe(args):
     if len(args) != 1:
-        die("usage: keys-cli describe NAME")
+        die("usage: agentvault-cli describe NAME")
     m = request("GET", f"/v1/secrets/{urllib.parse.quote(args[0], safe='')}")
     keep = ["name", "provider_name", "kind", "description", "risk", "risk_reason", "notes", "tags", "proxy_target",
             "docs_url", "fields", "parts", "expires_at", "exposed", "last_used_at", "use_count"]
@@ -158,7 +169,7 @@ def refused_by_vault(status, text):
 
 def cmd_call(args):
     if len(args) < 2:
-        die("usage: keys-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
+        die("usage: agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
     name, path, rest = args[0], args[1], args[2:]
     method, query, headers, body = "GET", "", {}, None
     i = 0
@@ -206,7 +217,7 @@ def cmd_call(args):
 
 def cmd_run(args):
     if "--" not in args or args.index("--") == 0 or args.index("--") == len(args) - 1:
-        die("usage: keys-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
+        die("usage: agentvault-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]")
     split = args.index("--")
     wanted, command = args[:split], args[split + 1:]
     env, secrets = dict(os.environ), []
@@ -223,7 +234,7 @@ def cmd_run(args):
 
     def blank(line):
         for n in needles:
-            line = line.replace(n, b"[redacted by keys]")
+            line = line.replace(n, b"[redacted by agentvault]")
         return line
 
     def pump(src, dst):
@@ -248,9 +259,10 @@ def cmd_run(args):
 def cmd_setup(args):
     """Asks for the token without echoing it, so it never lands in shell
     history or a chat, checks it, saves it and registers the MCP server."""
+    global CONF
     no_mcp = "--no-mcp" in args
     saved = open(f"{CONF}/url").read().strip() if os.path.exists(f"{CONF}/url") else ""
-    default = os.environ.get("KEYS_URL") or saved
+    default = env("URL") or saved
     url = input(f"Vault address [{default}]: " if default else "Vault address (https://...): ").strip() or default
     if not url.startswith("https://"):
         die("The address should start with https://")
@@ -267,10 +279,11 @@ def cmd_setup(args):
     except (urllib.error.URLError, OSError) as e:
         die(f"Can't reach the vault at {url}: {getattr(e, 'reason', e)}. Nothing was saved.")
 
+    CONF = NEW_CONF  # always save to the current location
     os.makedirs(CONF, mode=0o700, exist_ok=True)
     with open(f"{CONF}/url", "w") as f:
         f.write(url + "\n")
-    path = os.environ.get("KEYS_TOKEN_FILE", f"{CONF}/token")
+    path = env("TOKEN_FILE") or f"{CONF}/token"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -283,13 +296,15 @@ def cmd_setup(args):
             print("Claude Code isn't installed here, so MCP wasn't set up. The helper works on its own.")
         return
     # Replace any earlier registration; output is hidden because it can echo the header.
-    subprocess.run([claude, "mcp", "remove", "--scope", "user", "keys"], capture_output=True)
-    r = subprocess.run([claude, "mcp", "add", "--transport", "http", "--scope", "user", "keys", url + "/mcp",
+    # Replace this or an older registration (named "keys" before the rename).
+    for old in ("agentvault", "keys"):
+        subprocess.run([claude, "mcp", "remove", "--scope", "user", old], capture_output=True)
+    r = subprocess.run([claude, "mcp", "add", "--transport", "http", "--scope", "user", "agentvault", url + "/mcp",
                         "--header", f"Authorization: Bearer {token}"], capture_output=True, text=True)
     token = ""
     if r.returncode != 0:
         die("Saving worked, but adding the MCP server to Claude Code failed. Try again, or use the helper on its own.")
-    print("Claude Code's MCP server 'keys' is set up for all your projects.")
+    print("Claude Code's MCP server 'agentvault' is set up for all your projects.")
     print("Restart Claude Code to load it (in a session: exit, then run `claude --continue`).")
 
 

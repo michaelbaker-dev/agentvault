@@ -29,7 +29,7 @@ pub struct Verify {
     pub ref_pointer: Option<&'static str>,
 }
 
-const UA: (&str, &str) = ("user-agent", "keys-vault/0.1");
+const UA: (&str, &str) = ("user-agent", "agentvault/0.1");
 
 const VERIFY: Verify = Verify {
     method: "GET",

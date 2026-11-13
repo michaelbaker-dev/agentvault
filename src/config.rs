@@ -139,7 +139,9 @@ impl Config {
     }
 
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("keys.db")
+        // Installs from before the rename to agentvault keep their old file name.
+        let (new, old) = (self.data_dir.join("agentvault.db"), self.data_dir.join("keys.db"));
+        if !new.exists() && old.exists() { old } else { new }
     }
 }
 

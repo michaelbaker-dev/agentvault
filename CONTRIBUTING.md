@@ -37,7 +37,7 @@ To try the web interface, run a test vault on another port. Create a config like
 | `src/tests.rs` | Integration tests, including a fake provider server for every rotator |
 | `web/` | The web interface (plain JavaScript, no build step) |
 | `deploy/` | Installer, uninstaller, systemd units, automatic unlock |
-| `skill/keys-vault/` | The Claude skill and the `keys-cli` helper |
+| `skill/agentvault/` | The Claude skill and the `agentvault-cli` helper |
 
 ## Adding a provider
 

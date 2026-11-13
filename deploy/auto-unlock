@@ -1,9 +1,9 @@
 #!/bin/sh
 # Makes the vault unlock itself after a restart or reboot.
 #
-#   sudo /usr/local/lib/keys/auto-unlock        turn it on, or update it after
-#                                               changing your passphrase
-#   sudo /usr/local/lib/keys/auto-unlock off    go back to unlocking by hand
+#   sudo /usr/local/lib/agentvault/auto-unlock       turn it on, or update it after
+#                                                    changing your passphrase
+#   sudo /usr/local/lib/agentvault/auto-unlock off   go back to unlocking by hand
 #
 # Your passphrase is stored encrypted as a systemd credential, readable only by
 # root. The script restarts the vault and checks it really unlocked; if not,
@@ -11,9 +11,9 @@
 set -eu
 [ "$(id -u)" = 0 ] || { echo "Run it with sudo." >&2; exit 1; }
 
-UNIT=/etc/systemd/system/keys.service
-CRED=/etc/keys/passphrase.cred
-CONF=/etc/keys/config.toml
+UNIT=/etc/systemd/system/agentvault.service
+CRED=/etc/agentvault/passphrase.cred
+CONF=/etc/agentvault/config.toml
 [ -f "$UNIT" ] && [ -f "$CONF" ] || { echo "The vault isn't installed yet: run deploy/install.sh first." >&2; exit 1; }
 
 HOST=$(sed -n 's/^hostname *= *"\(.*\)"/\1/p' "$CONF")
@@ -45,7 +45,7 @@ wait_state() {
 
 enable_line() { sed -i 's/^#LoadCredentialEncrypted=/LoadCredentialEncrypted=/' "$UNIT"; }
 disable_line() { sed -i 's/^LoadCredentialEncrypted=/#LoadCredentialEncrypted=/' "$UNIT"; }
-restart() { systemctl daemon-reload; systemctl restart keys; }
+restart() { systemctl daemon-reload; systemctl restart agentvault; }
 
 if [ "${1:-}" = off ]; then
   disable_line
@@ -57,7 +57,7 @@ fi
 
 case $(vault_state) in
   new) echo "Set your passphrase first: open $URL in a browser, then run this again." >&2; exit 1 ;;
-  down) echo "The vault isn't answering at $URL. Check: systemctl status keys" >&2; exit 1 ;;
+  down) echo "The vault isn't answering at $URL. Check: systemctl status agentvault" >&2; exit 1 ;;
 esac
 
 [ -t 0 ] || { echo "Run this in a terminal: it asks for your passphrase." >&2; exit 1; }

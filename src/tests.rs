@@ -138,7 +138,7 @@ struct Session {
 
 impl Session {
     fn hdrs(&self) -> Vec<(&str, &str)> {
-        vec![("cookie", self.cookie.as_str()), ("x-keys-csrf", self.csrf.as_str())]
+        vec![("cookie", self.cookie.as_str()), ("x-agentvault-csrf", self.csrf.as_str())]
     }
 }
 
@@ -251,7 +251,7 @@ async fn session_needs_csrf_and_stays_on_its_device() {
         LAPTOP,
         "GET",
         "/v1/secrets/OPENAI_API_KEY/value",
-        &[("cookie", &s.cookie), ("x-keys-csrf", "nope")],
+        &[("cookie", &s.cookie), ("x-agentvault-csrf", "nope")],
         None,
     )
     .await;
@@ -1711,7 +1711,7 @@ async fn scheduler_rotates_due_keys() {
     crate::rotate::tick(&app).await;
     assert_ne!(value_of(&app, &s, "CF_DNS").await, old, "rotated once due");
     let rows = app.db.rotations_recent(None, 5).unwrap();
-    assert_eq!(rows[0].actor, "keys (scheduler)");
+    assert_eq!(rows[0].actor, "agentvault (scheduler)");
     crate::rotate::tick(&app).await;
     assert_eq!(
         app.db.rotations_recent(None, 5).unwrap().len(),

@@ -28,16 +28,16 @@ jobs:
       - run: cargo build --release --locked
       - name: Package
         run: |
-          # A fixed name, so .../releases/latest/download/keys-<arch>-linux.tar.gz always works.
-          name="keys-${{ matrix.arch }}-linux"
+          # A fixed name, so .../releases/latest/download/agentvault-<arch>-linux.tar.gz always works.
+          name="agentvault-${{ matrix.arch }}-linux"
           mkdir -p "dist/$name"
-          cp target/release/keys deploy/* README.md LICENSE-MIT LICENSE-APACHE config.example.toml "dist/$name/"
+          cp target/release/agentvault deploy/* README.md LICENSE-MIT LICENSE-APACHE config.example.toml "dist/$name/"
           cp -r skill "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@v4
         with:
-          name: keys-${{ matrix.arch }}
+          name: agentvault-${{ matrix.arch }}
           path: dist/*.tar.gz*
 
   release:

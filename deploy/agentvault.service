@@ -1,22 +1,22 @@
 [Unit]
-Description=keys: secrets vault for the tailnet
-Documentation=file:///opt/keys/README.md
+Description=AgentVault: secrets vault for the tailnet
+Documentation=file:///opt/agentvault/README.md
 After=network-online.target tailscaled.service
 Wants=network-online.target tailscaled.service
 
 [Service]
 Type=simple
-User=keys
-Group=keys
-# Issue/refresh the Tailscale HTTPS certificate as root, then hand it to the keys user.
-ExecStartPre=+/usr/local/lib/keys/refresh-cert
-ExecStart=/usr/local/bin/keys serve -c /etc/keys/config.toml
+User=agentvault
+Group=agentvault
+# Issue/refresh the Tailscale HTTPS certificate as root, then hand it to the agentvault user.
+ExecStartPre=+/usr/local/lib/agentvault/refresh-cert
+ExecStart=/usr/local/bin/agentvault serve -c /etc/agentvault/config.toml
 # The tailnet IP may not exist yet right after boot; retry until it does.
 Restart=on-failure
 RestartSec=5
-# Automatic unlock at boot: `sudo /usr/local/lib/keys/auto-unlock` stores the
+# Automatic unlock at boot: `sudo /usr/local/lib/agentvault/auto-unlock` stores the
 # passphrase as an encrypted credential and uncomments the next line.
-#LoadCredentialEncrypted=passphrase:/etc/keys/passphrase.cred
+#LoadCredentialEncrypted=passphrase:/etc/agentvault/passphrase.cred
 
 # Bind to 443 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -45,7 +45,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-StateDirectory=keys
+StateDirectory=agentvault
 StateDirectoryMode=0700
 UMask=0077
 LimitCORE=0

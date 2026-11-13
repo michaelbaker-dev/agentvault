@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh AgentVault's Tailscale HTTPS certificate
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/agentvault/refresh-cert
