@@ -44,7 +44,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 1. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), turn on **MagicDNS** and **HTTPS Certificates**.
 2. On the Linux machine that will hold the vault, download and install it. Use `aarch64` instead of `x86_64` on ARM:
    ```sh
-   curl -LO https://github.com/OWNER/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
+   curl -LO https://github.com/michaelbaker-dev/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
    tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
@@ -69,7 +69,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 **From source:**
 
 ```sh
-git clone https://github.com/OWNER/agentvault && cd agentvault
+git clone https://github.com/michaelbaker-dev/agentvault && cd agentvault
 cargo build --release
 sudo deploy/install.sh
 ```
