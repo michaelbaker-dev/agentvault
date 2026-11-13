@@ -350,3 +350,5 @@ td .small div { min-width: 160px; }
   .panel .ph { flex-direction: column; align-items: flex-start; }
 }
 .lead { margin-bottom: 14px; }
+.panel.approve.focus { border-color: var(--accent); }
+.panel.approve p.small { margin-bottom: 8px; }

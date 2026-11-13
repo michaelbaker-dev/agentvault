@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+### spandeck integration
+
+- Stations connect with the owner's approval: `POST /v1/token-requests`, an approval page that opens as a pop-up and closes itself, and a one-time collection from the machine that asked. Issued tokens are list + proxy only, read-only by default, pinned to the machine's stable Tailscale ID and blind to owner-only keys; approving again replaces a station's token.
+- `/v1/status` says `"service":"agentvault"` and tells callers other than the owner only the version and whether the vault is set up and unlocked.
+- `X-AgentVault-Actor` on proxy calls is recorded as a reported label and stripped before the provider call.
+- Optional station token rotation: `POST /v1/tokens/self/rotate` and `PUT /v1/tokens/self/rotation`, with the old token valid until the new one's first use (24-hour cap), overdue tokens allowed only to rotate, and `token_replaced` / `token_rotated` / `token_overdue` error codes.
+- `POST /v1/attention/report`: values seen in transcripts are matched after an identical reply and land on Needs attention.
+- The Tokens page shows each token's rotation.
+
 ### Security review (November 2026)
 
 Fixed before the first release, each with a regression test:

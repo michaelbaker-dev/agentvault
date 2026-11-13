@@ -55,6 +55,7 @@ impl Scope {
 
 #[derive(Debug, Clone)]
 pub struct TokenGrant {
+    pub id: i64,
     pub name: String,
     pub scopes: Vec<Scope>,
     pub secrets: Vec<String>,
@@ -167,6 +168,7 @@ pub fn grant_for(row: &TokenRow, caller: &Caller) -> Option<(TokenGrant, Option<
         }
     }
     let grant = TokenGrant {
+        id: row.id,
         name: row.name.clone(),
         scopes: row.scopes.iter().filter_map(|s| Scope::parse(s)).collect(),
         secrets: row.secrets.clone(),
@@ -326,6 +328,7 @@ mod tests {
     #[test]
     fn token_scopes_and_globs() {
         let p = Principal::Token(TokenGrant {
+            id: 1,
             name: "claude".into(),
             scopes: vec![Scope::List, Scope::Proxy],
             secrets: vec!["OPENAI_*".into()],
@@ -346,6 +349,10 @@ mod tests {
             nodes: vec!["mac".into()],
             proxy_get_only: false,
             node_pins: Default::default(),
+            rotate_every_hours: None,
+            rotation_changed_at: None,
+            last_rotated_at: None,
+            next_issued_at: None,
             created_at: 0,
             last_used_at: None,
             revoked_at: None,

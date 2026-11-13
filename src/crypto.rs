@@ -88,6 +88,12 @@ pub fn derive_kek(passphrase: &[u8], salt: &[u8], p: KdfParams) -> Result<KeyByt
     Ok(out)
 }
 
+/// Constant-time equality for secrets of the same, public length.
+pub fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }

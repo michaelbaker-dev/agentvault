@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS rotations (
 CREATE INDEX IF NOT EXISTS rotations_secret ON rotations(secret_id, id);
 -- "Needs attention" items the owner OK'd. `fp` pins the situation that was
 -- OK'd (key version, expiry, rotation id...); when it changes the item returns.
+-- A value someone reported seeing in a prompt, command or transcript matched
+-- this secret (version), so it should be replaced.
+CREATE TABLE IF NOT EXISTS exposure_reports (
+    id           INTEGER PRIMARY KEY,
+    secret_id    INTEGER NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+    version      INTEGER NOT NULL,
+    reported_at  INTEGER NOT NULL,
+    reporter     TEXT NOT NULL,
+    node         TEXT NOT NULL,
+    place        TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attention_acks (
     secret_id    INTEGER NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL,
@@ -118,6 +129,15 @@ CREATE TABLE IF NOT EXISTS attention_acks (
 const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("tokens", "proxy_get_only", "INTEGER NOT NULL DEFAULT 0"),
     ("tokens", "node_pins", "TEXT NOT NULL DEFAULT '{}'"),
+    // Station token rotation (spandeck): the interval, when it was set, the
+    // last swap, the swapped-in token waiting for its first use, and the
+    // token it replaced (so a stale copy is refused with a clear reason).
+    ("tokens", "rotate_every_hours", "INTEGER"),
+    ("tokens", "rotation_changed_at", "INTEGER"),
+    ("tokens", "last_rotated_at", "INTEGER"),
+    ("tokens", "next_hash", "BLOB"),
+    ("tokens", "next_issued_at", "INTEGER"),
+    ("tokens", "retired_hash", "BLOB"),
     ("secrets", "kind", "TEXT NOT NULL DEFAULT 'api_key'"),
     ("secrets", "owner_only", "INTEGER NOT NULL DEFAULT 0"),
     ("secrets", "fields", "TEXT NOT NULL DEFAULT '{}'"),
@@ -240,6 +260,9 @@ pub struct Description {
     pub status: String,
 }
 
+/// Columns read by `token_from_row`, in order.
+const TOKEN_COLS: &str = "id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins, rotate_every_hours, rotation_changed_at, last_rotated_at, next_issued_at";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenRow {
     pub id: i64,
@@ -255,6 +278,49 @@ pub struct TokenRow {
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    /// Rotation interval, or None for never expire.
+    pub rotate_every_hours: Option<i64>,
+    pub rotation_changed_at: Option<i64>,
+    pub last_rotated_at: Option<i64>,
+    /// A swap's new token is waiting for its first use (until then the
+    /// current one still works, for at most a day).
+    #[serde(skip)]
+    pub next_issued_at: Option<i64>,
+}
+
+/// A value reported as seen in a prompt, command or transcript that matched
+/// a secret (at the version current then).
+#[derive(Debug, Clone)]
+pub struct ExposureReport {
+    pub secret_id: i64,
+    pub version: i64,
+    pub id: i64,
+    pub reported_at: i64,
+    pub reporter: String,
+    pub node: String,
+    pub place: String,
+}
+
+/// Which of a token row's hashes a presented token matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenMatch {
+    Current,
+    /// The new token from a swap, used for the first time.
+    Next,
+    /// A token that a swap replaced.
+    Retired,
+}
+
+impl TokenRow {
+    /// When the token must be rotated by, if it has a rotation interval.
+    pub fn due_at(&self) -> Option<i64> {
+        let every = self.rotate_every_hours?;
+        let base = self
+            .created_at
+            .max(self.last_rotated_at.unwrap_or(0))
+            .max(self.rotation_changed_at.unwrap_or(0));
+        Some(base + every * 3_600_000)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -665,6 +731,17 @@ impl Db {
     }
 
     /// Another secret whose current value has this fingerprint.
+    /// The secret (id, current version) whose value has this fingerprint.
+    pub fn secret_id_by_mac(&self, mac: &[u8]) -> DbResult<Option<(i64, i64)>> {
+        self.c()
+            .query_row(
+                "SELECT id, version FROM secrets WHERE value_mac = ?1 ORDER BY id LIMIT 1",
+                [mac],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+    }
+
     pub fn secret_by_mac(&self, mac: &[u8], except: Option<i64>) -> DbResult<Option<String>> {
         self.c()
             .query_row(
@@ -825,33 +902,24 @@ impl Db {
             revoked_at: r.get(7)?,
             proxy_get_only: r.get(8)?,
             node_pins: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
+            rotate_every_hours: r.get(10)?,
+            rotation_changed_at: r.get(11)?,
+            last_rotated_at: r.get(12)?,
+            next_issued_at: r.get(13)?,
         })
     }
 
     pub fn token_list(&self) -> DbResult<Vec<TokenRow>> {
         let c = self.c();
-        let mut st = c.prepare(
-            "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens ORDER BY id DESC",
-        )?;
+        let mut st = c.prepare(&format!("SELECT {TOKEN_COLS} FROM tokens ORDER BY id DESC"))?;
         let rows = st.query_map([], Self::token_from_row)?;
         rows.collect()
-    }
-
-    pub fn token_by_hash(&self, hash: &[u8]) -> DbResult<Option<TokenRow>> {
-        self.c()
-            .query_row(
-                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens \
-                 WHERE hash = ?1 AND revoked_at IS NULL",
-                [hash],
-                Self::token_from_row,
-            )
-            .optional()
     }
 
     pub fn token_get(&self, id: i64) -> DbResult<Option<TokenRow>> {
         self.c()
             .query_row(
-                "SELECT id, name, scopes, secrets, nodes, created_at, last_used_at, revoked_at, proxy_get_only, node_pins FROM tokens WHERE id = ?1",
+                &format!("SELECT {TOKEN_COLS} FROM tokens WHERE id = ?1"),
                 [id],
                 Self::token_from_row,
             )
@@ -891,6 +959,119 @@ impl Db {
             params![id, name, node_id],
         )?;
         Ok(())
+    }
+
+    /// Finds the active token a presented hash belongs to: its current hash,
+    /// the new one from a swap, or the one a swap replaced.
+    pub fn token_lookup(&self, hash: &[u8]) -> DbResult<Option<(TokenRow, TokenMatch)>> {
+        self.c()
+            .query_row(
+                &format!(
+                    "SELECT {TOKEN_COLS}, CASE WHEN hash = ?1 THEN 0 WHEN next_hash = ?1 THEN 1 ELSE 2 END FROM tokens \
+                     WHERE (hash = ?1 OR next_hash = ?1 OR retired_hash = ?1) AND revoked_at IS NULL"
+                ),
+                [hash],
+                |r| {
+                    let m = match r.get::<_, i64>(14)? {
+                        0 => TokenMatch::Current,
+                        1 => TokenMatch::Next,
+                        _ => TokenMatch::Retired,
+                    };
+                    Ok((Self::token_from_row(r)?, m))
+                },
+            )
+            .optional()
+    }
+
+    /// Creates a token pinned to one machine's stable node id from the start.
+    #[allow(clippy::too_many_arguments)]
+    pub fn token_create_pinned(
+        &self,
+        name: &str,
+        hash: &[u8],
+        scopes: &[String],
+        secrets: &[String],
+        node: &str,
+        node_id: &str,
+        proxy_get_only: bool,
+    ) -> DbResult<i64> {
+        let c = self.c();
+        let pins = serde_json::json!({ node: node_id }).to_string();
+        c.execute(
+            "INSERT INTO tokens(name, hash, scopes, secrets, nodes, created_at, proxy_get_only, node_pins) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                name,
+                hash,
+                serde_json::to_string(scopes).expect("json"),
+                serde_json::to_string(secrets).expect("json"),
+                serde_json::to_string(&[node]).expect("json"),
+                now_ms(),
+                proxy_get_only,
+                pins
+            ],
+        )?;
+        Ok(c.last_insert_rowid())
+    }
+
+    /// A swap: the new token waits for its first use; the current one keeps
+    /// working until then. A second swap replaces the unused new token.
+    pub fn token_set_next(&self, id: i64, next_hash: &[u8]) -> DbResult<bool> {
+        let n = self.c().execute(
+            "UPDATE tokens SET next_hash = ?2, next_issued_at = ?3 WHERE id = ?1 AND revoked_at IS NULL",
+            params![id, next_hash, now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// First use of a swap's new token: it becomes current and the old one is
+    /// retired (and refused from now on).
+    pub fn token_promote(&self, id: i64) -> DbResult<()> {
+        self.c().execute(
+            "UPDATE tokens SET retired_hash = hash, hash = next_hash, next_hash = NULL, next_issued_at = NULL, last_rotated_at = ?2 \
+             WHERE id = ?1 AND next_hash IS NOT NULL",
+            params![id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn token_set_rotation(&self, id: i64, every_hours: Option<i64>) -> DbResult<()> {
+        self.c().execute(
+            "UPDATE tokens SET rotate_every_hours = ?2, rotation_changed_at = ?3 WHERE id = ?1",
+            params![id, every_hours, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    // ---- exposure reports ----
+
+    pub fn exposure_report(&self, secret_id: i64, version: i64, reporter: &str, node: &str, place: &str) -> DbResult<()> {
+        self.c().execute(
+            "INSERT INTO exposure_reports(secret_id, version, reported_at, reporter, node, place) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![secret_id, version, now_ms(), reporter, node, place],
+        )?;
+        Ok(())
+    }
+
+    /// The newest exposure report for each secret that has one.
+    pub fn exposure_reports_latest(&self) -> DbResult<Vec<ExposureReport>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT secret_id, version, id, reported_at, reporter, node, place FROM exposure_reports r \
+             WHERE id = (SELECT MAX(id) FROM exposure_reports WHERE secret_id = r.secret_id)",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok(ExposureReport {
+                secret_id: r.get(0)?,
+                version: r.get(1)?,
+                id: r.get(2)?,
+                reported_at: r.get(3)?,
+                reporter: r.get(4)?,
+                node: r.get(5)?,
+                place: r.get(6)?,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn token_touch(&self, id: i64) -> DbResult<()> {

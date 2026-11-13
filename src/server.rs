@@ -60,6 +60,14 @@ pub fn router(app: AppRef) -> Router {
         .route("/v1/import/commit", post(crate::import_api::commit))
         .route("/v1/tokens", get(list_tokens).post(create_token))
         .route("/v1/tokens/{id}", delete(revoke_token).patch(update_token))
+        .route("/v1/tokens/self", get(crate::stations::token_self))
+        .route("/v1/tokens/self/rotate", post(crate::stations::rotate_self))
+        .route("/v1/tokens/self/rotation", axum::routing::put(crate::stations::set_rotation))
+        .route("/v1/token-requests", get(crate::stations::list).post(crate::stations::open))
+        .route("/v1/token-requests/{id}", get(crate::stations::collect))
+        .route("/v1/token-requests/{id}/approve", post(crate::stations::approve))
+        .route("/v1/token-requests/{id}/deny", post(crate::stations::deny))
+        .route("/v1/attention/report", post(crate::stations::report))
         .route("/v1/dashboard", get(dashboard_handler))
         .route("/v1/events", get(events))
         .route("/v1/audit/verify", get(audit_verify))
@@ -156,7 +164,7 @@ pub fn valid_name(n: &str) -> bool {
     (1..=128).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
-fn valid_glob(g: &str) -> bool {
+pub(crate) fn valid_glob(g: &str) -> bool {
     (1..=128).contains(&g.len()) && g.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '*'))
 }
 
@@ -305,11 +313,26 @@ struct ChangePassBody {
 }
 
 async fn status(State(app): State<AppRef>, Extension(caller): Extension<Caller>) -> ApiResult {
+    // Anyone on the tailnet can ask: tell them only that this is AgentVault,
+    // its version and whether it is set up and unlocked (spandeck's discovery
+    // and vault state need no more). The owner's devices get the full picture.
+    if !app.is_owner_device(&caller) {
+        return Ok(Json(json!({
+            "service": "agentvault",
+            "version": env!("CARGO_PKG_VERSION"),
+            "initialized": Vault::is_initialized(&app.db)?,
+            "sealed": app.vault.is_sealed(),
+            "owner_device": false,
+            "caller": { "node": caller.node, "user": caller.user, "tags": caller.tags },
+        }))
+        .into_response());
+    }
     let claude_ready = match &app.cfg.describe.claude_secret {
         Some(n) => app.db.secret_get(n)?.is_some(),
         None => false,
     };
     Ok(Json(json!({
+        "service": "agentvault",
         "initialized": Vault::is_initialized(&app.db)?,
         "sealed": app.vault.is_sealed(),
         "caller": { "node": caller.node, "user": caller.user, "tags": caller.tags },
@@ -1270,7 +1293,14 @@ async fn proxy_request(
     body: Bytes,
 ) -> ApiResult {
     let p = app.authenticate(&headers, &caller)?;
-    let ev = EventInfo::new("proxy", p.label())
+    // spandeck names the pane that asked. It is recorded as a label the
+    // caller reported, never used for a permission decision, and stripped
+    // before the request goes to the provider.
+    let actor = match headers.get("x-agentvault-actor").and_then(|v| v.to_str().ok()).map(str::trim) {
+        Some(l) if !l.is_empty() && !l.chars().any(char::is_control) => format!("{} · {} (reported)", p.label(), truncate(l, 120)),
+        _ => p.label(),
+    };
+    let ev = EventInfo::new("proxy", actor)
         .secret(&name)
         .detail(truncate(&format!("{method} /{path}"), 200));
     require(&p, Scope::Proxy, &name, &ev)?;

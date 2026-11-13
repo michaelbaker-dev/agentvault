@@ -154,8 +154,7 @@
     }
     if (!S.status.initialized) return render(setupScreen());
     if (!S.csrf) return render(loginScreen());
-    const v = location.hash.replace(/^#\/?/, "");
-    S.view = VIEWS[v] ? v : "secrets";
+    routeFromHash();
     render(shell());
   }
 
@@ -277,17 +276,33 @@
       if (t.dataset.view === S.view) t.setAttribute("aria-current", "page");
       else t.removeAttribute("aria-current");
     });
-    const fn = { secrets: secretsView, rotation: rotationView, import: importView, dashboard: dashboardView, tokens: tokensView, settings: settingsView }[S.view];
+    const fn = { secrets: secretsView, rotation: rotationView, import: importView, dashboard: dashboardView, tokens: tokensView, settings: settingsView, approve: approveView }[S.view];
     main.replaceChildren(fn());
     window.scrollTo(0, 0);
   }
 
   window.addEventListener("hashchange", () => {
-    const v = location.hash.replace(/^#\/?/, "");
-    if (!S.csrf || !VIEWS[v]) return;
-    S.view = v;
-    renderView();
+    if (!S.csrf) return;
+    if (routeFromHash()) renderView();
   });
+
+  // `#/approve/<id>` opens the station approval page (not in the menu: a
+  // station's Control Deck links to it); everything else is a menu view.
+  function routeFromHash() {
+    const v = location.hash.replace(/^#\/?/, "");
+    const m = v.match(/^approve(?:\/([0-9a-f]{32}))?/);
+    if (m) {
+      S.view = "approve";
+      S.approveId = m[1] || null;
+      return true;
+    }
+    if (!VIEWS[v]) {
+      if (!S.view) S.view = "secrets";
+      return false;
+    }
+    S.view = v;
+    return true;
+  }
 
   async function lockVault() {
     if (!confirm("Lock the vault? The key is wiped from memory and every app and token stops working until you sign in again.")) return;
@@ -1749,6 +1764,72 @@
     );
   }
 
+  // ---------------------------------------------------------------- station approvals
+
+  // A spandeck station asked for a token. This page shows who is asking and
+  // what the token would allow; approving needs a recent passphrase. When it
+  // was opened as spandeck's pop-up it closes itself once nothing is left to
+  // decide (browsers only let a script close a window a script opened, so in
+  // an ordinary tab it simply says so instead).
+  function approveView() {
+    const box = h("div", {}, h("p", { class: "muted", text: "Loading…" }));
+    const handled = [];
+    const finish = () => {
+      const last = handled[handled.length - 1];
+      fill(
+        box,
+        h("div", { class: "note" }, h("b", { text: last ? (last.approved ? "Approved." : "Denied.") : "Nothing is waiting for approval." }), " ", last && last.approved ? `${last.name} can collect its token now. You can close this window.` : "You can close this window."),
+      );
+      if (handled.length) setTimeout(() => window.close(), 600);
+    };
+    const load = async () => {
+      let r;
+      try {
+        r = await api("GET", "/v1/token-requests");
+      } catch (e) {
+        return box.replaceChildren(errBox(e));
+      }
+      const items = r.requests.sort((a, b) => (a.id === S.approveId ? -1 : b.id === S.approveId ? 1 : 0));
+      if (!items.length) return finish();
+      fill(box, items.map((q) => requestCard(q)));
+    };
+    const requestCard = (q) => {
+      const patterns = h("input", { class: "input mono", value: "*", "aria-label": "Keys it may use" });
+      const getOnly = h("input", { type: "checkbox", checked: true });
+      const err = h("p", { class: "form-error", role: "alert" });
+      const who = q.tags && q.tags.length ? `tagged ${q.tags.join(", ")}` : q.user;
+      const act = async (approve) => {
+        err.textContent = "";
+        try {
+          if (approve) {
+            const secrets = patterns.value.split(",").map((x) => x.trim()).filter(Boolean);
+            const res = await api("POST", `/v1/token-requests/${q.id}/approve`, { secrets, proxy_get_only: getOnly.checked });
+            handled.push({ approved: true, name: res.token_name });
+          } else {
+            await api("POST", `/v1/token-requests/${q.id}/deny`, {});
+            handled.push({ approved: false, name: q.node });
+          }
+          load();
+        } catch (e) {
+          err.textContent = e.message;
+        }
+      };
+      return h(
+        "div",
+        { class: "panel approve" + (q.id === S.approveId ? " focus" : "") },
+        h("div", { class: "ph" }, h("h2", {}, "Machine ", h("span", { class: "mono", text: q.node })), h("p", { text: `asked ${ago(q.created_at)} · expires in ${Math.max(1, Math.ceil((q.expires_at - Date.now()) / 60000))} min` })),
+        h("p", { class: "small" }, "Tailscale says this is ", h("b", { class: "mono", text: q.node_fqdn }), ` (${who}). It calls itself `, h("span", { class: "mono", text: q.label }), h("span", { class: "hint", text: " (reported by the machine, not checked)" }), "."),
+        h("p", { class: "small", text: `If you approve, ${q.token_name} can list your keys and call providers through the vault with them, from this machine only. It can never read a raw value or see your owner-only keys.` }),
+        field("ap-keys-" + q.id, "Keys it may use", patterns, "Comma-separated names; * is a wildcard, e.g. OPENAI_*, GITHUB_TOKEN."),
+        h("label", { class: "check" }, getOnly, h("span", {}, h("b", { text: "Read-only (GET requests only)" }), " — ", h("span", { class: "hint", text: "Recommended. Untick to let it make changes at providers, as far as each key allows." }))),
+        err,
+        h("div", { class: "row-actions" }, h("button", { class: "btn primary", type: "button", text: "Approve", onclick: () => act(true) }), h("button", { class: "btn danger", type: "button", text: "Deny", onclick: () => act(false) })),
+      );
+    };
+    load();
+    return h("section", {}, head("Approve station access", "A spandeck station asked for a token. Approving needs your passphrase if you haven't entered it in the last 5 minutes."), box);
+  }
+
   // ---------------------------------------------------------------- tokens
 
   const GET_ONLY_HINT =
@@ -1879,12 +1960,15 @@
       const r = await api("GET", "/v1/tokens");
       list.replaceChildren(
         table(
-          [["Name"], ["Scopes"], ["Secrets"], ["Machines"], ["Last used"], [""]],
+          [["Name"], ["Scopes"], ["Secrets"], ["Machines"], ["Rotation"], ["Last used"], [""]],
           r.tokens.map((t) => [
             h("span", { title: "Created " + when(t.created_at), text: t.name }),
             t.scopes.join(", ") + (t.proxy_get_only && t.scopes.includes("proxy") ? " (GET only)" : ""),
             h("span", { class: "mono", text: t.secrets.join(", ") }),
             t.nodes.length ? h("span", { class: "mono", text: t.nodes.join(", ") }) : h("span", { class: "muted", text: "any" }),
+            t.rotate_every_hours
+              ? h("span", { title: t.last_rotated_at ? "Last rotated " + when(t.last_rotated_at) : "Not rotated yet", text: `every ${t.rotate_every_hours % 24 ? t.rotate_every_hours + " h" : t.rotate_every_hours / 24 + " d"}` + (t.name.startsWith("spandeck:") ? " (set in spandeck)" : "") })
+              : h("span", { class: "muted", text: "never expires" }),
             t.revoked_at ? h("span", { class: "muted", text: "revoked " + ago(t.revoked_at) }) : h("span", { title: when(t.last_used_at), text: ago(t.last_used_at) }),
             t.revoked_at
               ? ""

@@ -17,6 +17,7 @@ mod providers;
 mod proxy;
 mod rotate;
 mod server;
+mod stations;
 mod timeutil;
 mod vault;
 mod web;
@@ -181,6 +182,7 @@ async fn serve(cfg: Config) -> Result<(), String> {
         minted: Default::default(),
         endpoints: Default::default(),
         auto_unlock: Default::default(),
+        stations: Default::default(),
     });
     match app.db.rotations_fail_stale() {
         Ok(n) if n > 0 => tracing::warn!("{n} rotation(s) were interrupted by a restart; the old keys are still in use"),

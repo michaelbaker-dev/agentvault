@@ -188,6 +188,18 @@ agentvault-cli call GITHUB_TOKEN /user               # call the provider through
 agentvault-cli run OPENAI_API_KEY -- python app.py   # program gets the key; output has it blanked (needs read scope)
 ```
 
+### With spandeck
+
+spandeck terminals can connect each of their machines (stations) to the vault, so the agents in their panes use your keys through the proxy without ever holding one.
+
+1. In spandeck's Control Deck, click **Connect** on a station, or **Connect all stations**. The station asks the vault for a token; any device on your tailnet could ask, but nothing is issued without you.
+2. A small window opens on the vault's own page, showing its address. It says which machine is asking (as Tailscale identifies it) and what the token would allow; you choose the keys it may use and whether it is read-only (the default). Enter your passphrase if you haven't in the last 5 minutes, and approve. The window closes itself.
+3. The station collects its token once, with a one-time code, and only from that machine.
+
+A station token can list keys and call providers through the proxy. It can't read a raw value or see owner-only keys, it is pinned to the machine's stable Tailscale ID, and it never expires unless you set rotation for that station in the Control Deck: then spandeck swaps it automatically, with nothing for you to do. Approving a station again replaces its old token; revoke one any time on the Tokens page (`spandeck:<machine>`).
+
+spandeck also reports keys it finds in prompts or transcripts. The vault checks each against your keys, always gives the same reply, and puts any match on your **Needs attention** list.
+
 ### Descriptions written by Claude
 
 Add your Anthropic API key to the vault as `ANTHROPIC_API_KEY`. From then on, Claude writes each new key's description (`claude-opus-5-5` at low effort, billed to your Anthropic account; set `model` in `[describe]` to use another model). Without it, the vault uses built-in descriptions. Claude receives only:
@@ -219,6 +231,12 @@ It never receives the value.
 | POST | `/v1/attention/dismiss` `{secret}` (OK: hide its current items until something changes), `/v1/attention/restore` `{secret}` | owner session |
 | POST | `/v1/rotations/ID/rollback`, `/v1/rotations/ID/done` | owner session |
 | POST | `/v1/import/preview` `{text}`, `/v1/import/commit` `{import_id, items}` | owner session |
+| POST | `/v1/token-requests` `{station}` → `{request_id, approve_url, collect_code, expires_at}` | none (your devices and tagged machines) |
+| GET | `/v1/token-requests/ID` with header `X-Collect-Code` (or `?code=`) → `pending`, `denied`, or once `{token, scopes, secrets, proxy_get_only}` | none (the machine that asked) |
+| GET, POST | `/v1/token-requests`, `/v1/token-requests/ID/approve` `{secrets?, proxy_get_only?}`, `/v1/token-requests/ID/deny` | owner session |
+| GET | `/v1/tokens/self`: the calling token's scopes, keys, machines and rotation | any token |
+| POST, PUT | `/v1/tokens/self/rotate` → `{token}`; `/v1/tokens/self/rotation` `{every_hours \| null}` | any token |
+| POST | `/v1/attention/report` `{value, place?}` → always `202 {"received":true}` | any token |
 
 Secrets made of several parts carry `extras: [{name, value}]` (encrypted) and `fields: {name: value}` (plaintext, owner-only to change). The proxy can send them with `basic:<field>` or `headers:Name={part};Other={value}`.
 
@@ -277,6 +295,9 @@ Edit `/etc/agentvault/config.toml` (every option is documented in [config.exampl
 | Owner settings | Only the owner can change who may see a secret, its linked plaintext fields, its provider, its manager, its rotation schedule or its proxy target. Exposing an owner-only secret, changing a manager or proxy, importing, rotating and undoing a rotation all need a fresh passphrase. |
 | Rotation | A key set as another's manager becomes owner-only, and rotation refuses a manager that isn't owner-only or isn't the expected kind. Tokens can't change the value of a key that rotates, renews itself or manages another, so they can't steer which key the vault creates or revokes. A rotation stops before creating anything if the old key isn't in the manager's account. Managing credentials go only to their provider's fixed API address; IDs from provider replies are checked before they go into a URL; provider error text is redacted before it's logged or shown. Revocation and undo re-check the rotation under a per-key lock and never touch a key that changed since. A rotation that fails leaves the old key in place (a Cloudflare roll, which replaces the value at once, keeps the new value). |
 | Import | Pasted text is parsed in memory. The preview shows only a public prefix and the length of each value, and anything in a label that looks like a password (after words like "password", "pass" or "pin", `user:password` pairs, mixed letters and digits) is hidden from notes and names. The values stay on the server for 30 minutes for the one device that pasted them, and are used up by the commit. |
+| Station tokens | A station may ask for a token without a credential, but only from your own devices or tagged machines, and nothing is issued until you approve it on the vault's own page with a fresh passphrase. The page can't be embedded in another site. The token is collected once, with a one-time code, from the machine that asked; it is limited to list and proxy, read-only by default, pinned to the machine's stable Tailscale ID and blind to owner-only keys. Requests expire after 10 minutes; an approved token not collected in time is revoked. |
+| Token rotation | Optional, set per station in spandeck. After a swap, the old token works until the new one is first used (a day at most); a copy of a replaced token is refused with `token_replaced`, so spandeck can tell you someone else used it. An overdue token can only rotate. Changes to the setting are logged. |
+| Exposure reports | A reported value is matched against your keys after the reply is sent, and the reply is always the same, so reports can't be used to test guesses. Matches are shown only to you. |
 | Duplicates | Detected with a fingerprint keyed by the vault's root key, so the database can't be used to test password guesses, and the web session needs a fresh passphrase before it can submit values to compare. |
 
 Not covered:
@@ -298,7 +319,7 @@ Not covered:
 ## Development
 
 ```sh
-cargo test                                  # 78 tests: crypto, auth, tokens, CSRF, sealing, MCP, audit chain, import, every rotator against a fake provider
+cargo test                                  # 87 tests: crypto, auth, tokens, CSRF, sealing, MCP, audit chain, import, every rotator against a fake provider
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo deny check                            # advisories, licenses, sources
 gitleaks dir .                              # no secrets in the tree

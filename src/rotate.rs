@@ -1512,6 +1512,7 @@ pub fn mark_done(app: &AppRef, id: i64) -> ApiResult<RotationRow> {
 /// Runs every minute: revokes old keys whose grace period is over, and
 /// rotates keys whose schedule is due.
 pub async fn tick(app: &AppRef) {
+    crate::stations::prune(app);
     crate::import_api::prune(app);
     if app.vault.is_sealed() {
         return;
@@ -1561,6 +1562,8 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
     let now = now_ms();
     let all = app.db.secret_list()?;
     let latest: HashMap<i64, RotationRow> = app.db.rotations_latest()?.into_iter().map(|r| (r.secret_id, r)).collect();
+    // Values reported as seen in a prompt or transcript (spandeck), for the version still in use.
+    let reports: HashMap<i64, _> = app.db.exposure_reports_latest()?.into_iter().map(|r| (r.secret_id, r)).collect();
     let mut out = vec![];
     let mut add = |m: &SecretMeta, kind: &str, fp: String, level: &str, reason: String, action: &str| {
         out.push((
@@ -1647,6 +1650,18 @@ fn attention_items(app: &AppRef) -> ApiResult<Vec<(i64, Value)>> {
                 format!("same value as {}", o.name),
                 "delete",
             );
+        }
+        if let Some(r) = reports.get(&m.id)
+            && r.version == m.version
+        {
+            let reason = format!(
+                "seen in {} on {} ({}, reported by {}); replace it",
+                r.place,
+                r.node,
+                crate::timeutil::format_date(r.reported_at),
+                r.reporter
+            );
+            add(m, "reported", r.id.to_string(), "critical", reason, "rotate");
         }
         if let Some(problem) = manager_problem(p, m, &all) {
             add(

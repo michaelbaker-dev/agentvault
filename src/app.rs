@@ -17,7 +17,7 @@ use tokio::sync::Semaphore;
 use crate::auth::{self, LoginLimiter, Principal, Sessions};
 use crate::config::Config;
 use crate::crypto::KdfParams;
-use crate::db::{Db, NewEvent, NewValue, SecretMeta, now_ms};
+use crate::db::{Db, NewEvent, NewValue, SecretMeta, TokenMatch, now_ms};
 use crate::identity::{Caller, Resolver};
 use crate::material::Material;
 use crate::vault::{Vault, VaultError};
@@ -47,6 +47,8 @@ pub struct App {
     pub endpoints: crate::rotate::Endpoints,
     /// Whether the vault unlocks itself at boot, and whether that still works.
     pub auto_unlock: AutoUnlock,
+    /// spandeck stations' pending token requests and report budgets.
+    pub stations: crate::stations::Stations,
 }
 
 /// State of unattended unlock at boot (a systemd credential or passphrase file).
@@ -126,6 +128,9 @@ pub fn with_event(resp: impl IntoResponse, ev: EventInfo) -> Response {
 pub struct ApiError {
     pub status: StatusCode,
     pub msg: String,
+    /// A stable, machine-readable reason for clients that act on it
+    /// (e.g. spandeck telling "someone else rotated this token" apart).
+    pub code: Option<&'static str>,
     pub event: Option<Box<EventInfo>>,
 }
 
@@ -134,8 +139,13 @@ impl ApiError {
         Self {
             status,
             msg: msg.into(),
+            code: None,
             event: None,
         }
+    }
+    pub fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
     }
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, msg)
@@ -178,7 +188,11 @@ impl From<VaultError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut r = (self.status, Json(json!({ "error": self.msg }))).into_response();
+        let body = match self.code {
+            Some(code) => json!({ "error": self.msg, "code": code }),
+            None => json!({ "error": self.msg }),
+        };
+        let mut r = (self.status, Json(body)).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
             r.headers_mut()
                 .insert(header::WWW_AUTHENTICATE, "Bearer realm=\"agentvault\"".parse().expect("static"));
@@ -221,16 +235,45 @@ impl App {
     /// the CSRF header; tokens can't be sent by a browser automatically, so
     /// they don't need one.
     pub fn authenticate(&self, headers: &HeaderMap, caller: &Caller) -> ApiResult<Principal> {
+        self.authenticate_with(headers, caller, false)
+    }
+
+    /// Like [`Self::authenticate`]; `rotating` lets an overdue token through,
+    /// for the one call it may still make: rotating itself.
+    pub fn authenticate_with(&self, headers: &HeaderMap, caller: &Caller, rotating: bool) -> ApiResult<Principal> {
         if let Some(tok) = bearer(headers) {
             if !tok.starts_with(auth::TOKEN_PREFIX) {
                 return Err(ApiError::unauthorized("not a keys token"));
             }
-            let row = self
+            let (row, matched) = self
                 .db
-                .token_by_hash(&auth::token_hash(tok))?
+                .token_lookup(&auth::token_hash(tok))?
                 .ok_or_else(|| ApiError::unauthorized("invalid or revoked token"))?;
             let (grant, pin) = auth::grant_for(&row, caller)
                 .ok_or_else(|| ApiError::forbidden(format!("token '{}' is not allowed from {}", row.name, caller.node)))?;
+            match matched {
+                TokenMatch::Retired => {
+                    return Err(ApiError::unauthorized(
+                        "this token was replaced by a rotation. If this station didn't rotate it, someone else has used its token: reconnect the station",
+                    )
+                    .with_code("token_replaced"));
+                }
+                // The current token stays valid while a swap's new token is unused, for a day at most.
+                TokenMatch::Current
+                    if row
+                        .next_issued_at
+                        .is_some_and(|t| now_ms() - t > crate::stations::OLD_TOKEN_GRACE_MS) =>
+                {
+                    return Err(
+                        ApiError::unauthorized("this token was rotated more than a day ago; use the new one").with_code("token_rotated"),
+                    );
+                }
+                TokenMatch::Next => self.db.token_promote(row.id)?,
+                TokenMatch::Current => {}
+            }
+            if !rotating && matched != TokenMatch::Next && row.due_at().is_some_and(|d| now_ms() > d) {
+                return Err(ApiError::forbidden("this token is overdue for rotation; rotate it first").with_code("token_overdue"));
+            }
             if let Some(name) = pin {
                 self.db.token_pin(row.id, &name, &caller.node_id)?;
             }

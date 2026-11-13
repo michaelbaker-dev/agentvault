@@ -98,6 +98,7 @@ fn test_app_with(endpoints: crate::rotate::Endpoints) -> AppRef {
         minted: Default::default(),
         endpoints,
         auto_unlock: Default::default(),
+        stations: Default::default(),
     })
 }
 
@@ -849,6 +850,7 @@ fn clone_app(a: &AppRef) -> App {
         minted: Default::default(),
         endpoints: Default::default(),
         auto_unlock: Default::default(),
+        stations: Default::default(),
     }
 }
 
@@ -2621,4 +2623,521 @@ fn import_labels_never_keep_a_password() {
     // Ordinary labels survive.
     assert_eq!(mask_line("Router cabin ssh"), "Router cabin ssh");
     assert_eq!(mask_line("Website deploys, GitHub"), "Website deploys, GitHub");
+}
+
+// ---- spandeck stations: connect (phase 1), rotation (phase 2), reports (phase 3) ----
+
+/// Opens a token request from the machine at `ip`: (request id, collect code).
+async fn open_request(app: &AppRef, ip: &str, label: &str) -> (String, String) {
+    let r = call(app, ip, "POST", "/v1/token-requests", &[], Some(json!({ "station": label }))).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    assert!(r.body["approve_url"].as_str().unwrap().contains("#/approve/"));
+    (
+        r.body["request_id"].as_str().unwrap().to_string(),
+        r.body["collect_code"].as_str().unwrap().to_string(),
+    )
+}
+
+async fn collect_req(app: &AppRef, ip: &str, id: &str, code: &str) -> Resp {
+    call(
+        app,
+        ip,
+        "GET",
+        &format!("/v1/token-requests/{id}"),
+        &[("x-collect-code", code)],
+        None,
+    )
+    .await
+}
+
+/// Opens, approves and collects a station token for the machine at `ip`.
+async fn connect_station(app: &AppRef, s: &Session, ip: &str, body: Value) -> String {
+    let (id, code) = open_request(app, ip, "my station").await;
+    let r = call(
+        app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/token-requests/{id}/approve"),
+        &s.hdrs(),
+        Some(body),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let r = collect_req(app, ip, &id, &code).await;
+    assert_eq!(r.body["status"], "approved", "{:?}", r.body);
+    format!("Bearer {}", r.body["token"].as_str().unwrap())
+}
+
+#[tokio::test]
+async fn stations_connect_with_the_owners_approval_only() {
+    let app = test_app();
+    let s = setup(&app).await;
+    add(&app, &s, "OPENAI_API_KEY", &fake("sk-proj-", 'q', 40)).await;
+    add(&app, &s, "GITHUB_TOKEN", &fake("ghp_", 'g', 36)).await;
+    let r = add_with(&app, &s, json!({ "name": "BANK_PASSWORD", "value": "hunter2 hunter2" })).await;
+    assert_eq!(r.body["owner_only"], true);
+
+    // Status: anyone on the tailnet learns only what discovery needs.
+    let st = call(&app, TAGGED, "GET", "/v1/status", &[], None).await.body;
+    assert_eq!(st["service"], "agentvault");
+    assert_eq!(st["sealed"], false);
+    assert!(
+        st.get("describer").is_none() && st.get("hostname").is_none() && st.get("origin").is_none(),
+        "{st}"
+    );
+    let st = call(&app, LAPTOP, "GET", "/v1/status", &[], None).await.body;
+    assert_eq!(st["service"], "agentvault");
+    assert!(st.get("describer").is_some(), "the owner still gets the full status");
+
+    // Only the owner's devices and tagged machines may ask.
+    let r = call(&app, FRIEND, "POST", "/v1/token-requests", &[], Some(json!({ "station": "x" }))).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let (first, _) = open_request(&app, TAGGED, "build box").await;
+    let (id, code) = open_request(&app, TAGGED, "build box").await;
+    let (spark_id, spark_code) = open_request(&app, SPARK, "server").await;
+    let list = call(&app, LAPTOP, "GET", "/v1/token-requests", &s.hdrs(), None).await.body;
+    let ids: Vec<&str> = list["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert!(!ids.contains(&first.as_str()), "a new request replaces the machine's pending one");
+    assert_eq!(ids.len(), 2);
+    let tagged = list["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(tagged["node"], "ci-runner");
+    assert_eq!(tagged["token_name"], "spandeck:ci-runner");
+
+    // Nothing to collect yet; never from another machine or with the wrong code.
+    assert_eq!(collect_req(&app, TAGGED, &id, &code).await.body["status"], "pending");
+    assert_eq!(collect_req(&app, LAPTOP, &id, &code).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(collect_req(&app, TAGGED, &id, "wrong").await.status, StatusCode::FORBIDDEN);
+
+    // Approval needs the owner session and a fresh passphrase.
+    let some_token = token(&app, &s, &["list", "proxy", "read", "write", "delete"], &["*"], &[]).await;
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        &format!("/v1/token-requests/{id}/approve"),
+        &[("authorization", some_token.as_str())],
+        Some(json!({})),
+    )
+    .await;
+    assert!(
+        r.status == StatusCode::FORBIDDEN || r.status == StatusCode::UNAUTHORIZED,
+        "{}",
+        r.status
+    );
+    assert_eq!(
+        call(
+            &app,
+            SPARK,
+            "GET",
+            "/v1/token-requests",
+            &[("authorization", some_token.as_str())],
+            None
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    app.sessions.make_stale();
+    let approve = json!({ "secrets": ["OPENAI_*"] });
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/token-requests/{id}/approve"),
+        &s.hdrs(),
+        Some(approve.clone()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::PRECONDITION_REQUIRED);
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/session/confirm",
+        &s.hdrs(),
+        Some(json!({ "passphrase": PASS })),
+    )
+    .await;
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/token-requests/{id}/approve"),
+        &s.hdrs(),
+        Some(approve),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body["token_name"], "spandeck:ci-runner");
+
+    // Collected once, by that machine.
+    let got = collect_req(&app, TAGGED, &id, &code).await.body;
+    assert_eq!(got["status"], "approved");
+    assert_eq!(got["scopes"], json!(["list", "proxy"]));
+    assert_eq!(got["proxy_get_only"], true);
+    let tok = format!("Bearer {}", got["token"].as_str().unwrap());
+    assert_eq!(
+        collect_req(&app, TAGGED, &id, &code).await.status,
+        StatusCode::NOT_FOUND,
+        "a second collect fails"
+    );
+
+    // The issued token: listed keys only, no raw values, no owner-only keys, GET only, this machine only.
+    let h = [("authorization", tok.as_str())];
+    let names: Vec<String> = call(&app, TAGGED, "GET", "/v1/secrets", &h, None).await.body["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["OPENAI_API_KEY"]);
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets/OPENAI_API_KEY/value", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets/BANK_PASSWORD", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, TAGGED, "POST", "/v1/proxy/OPENAI_API_KEY/v1/x", &h, None).await.status,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::FORBIDDEN,
+        "pinned to its machine"
+    );
+    let me = call(&app, TAGGED, "GET", "/v1/tokens/self", &h, None).await.body;
+    assert_eq!(me["name"], "spandeck:ci-runner");
+    assert_eq!(me["rotation"]["every_hours"], Value::Null);
+
+    // The pane label is recorded as reported, and never sent on (proxy unit tests check the stripping).
+    call(
+        &app,
+        TAGGED,
+        "GET",
+        "/v1/proxy/OPENAI_API_KEY/v1/models",
+        &[h[0], ("x-agentvault-actor", "api/dev@ci-runner")],
+        None,
+    )
+    .await;
+    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=100", &s.hdrs(), None).await.body;
+    let events = ev["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["action"] == "proxy" && e["actor"].as_str().unwrap().contains("api/dev@ci-runner (reported)"))
+    );
+    for action in ["token_request.open", "token_request.approve", "token_request.collect"] {
+        assert!(events.iter().any(|e| e["action"] == action), "{action} is in the audit log");
+    }
+
+    // Denied: the station is told, and gets nothing.
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/token-requests/{spark_id}/deny"),
+        &s.hdrs(),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(collect_req(&app, SPARK, &spark_id, &spark_code).await.body["status"], "denied");
+
+    // Approving the same station again replaces its earlier token.
+    let tok2 = connect_station(&app, &s, TAGGED, json!({})).await;
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &h, None).await.status,
+        StatusCode::UNAUTHORIZED,
+        "old token revoked"
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &[("authorization", tok2.as_str())], None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+
+    // Expired: a pending request yields nothing; an approved one never collected is revoked.
+    let (pid, pcode) = open_request(&app, SPARK, "server").await;
+    let (aid, acode) = open_request(&app, TAGGED, "build box").await;
+    call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/token-requests/{aid}/approve"),
+        &s.hdrs(),
+        Some(json!({})),
+    )
+    .await;
+    let issued = app
+        .db
+        .token_list()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.name == "spandeck:ci-runner" && t.revoked_at.is_none())
+        .unwrap()
+        .id;
+    app.stations.expire_all();
+    assert_eq!(collect_req(&app, SPARK, &pid, &pcode).await.status, StatusCode::GONE);
+    assert_eq!(collect_req(&app, TAGGED, &aid, &acode).await.status, StatusCode::GONE);
+    assert!(app.db.token_get(issued).unwrap().unwrap().revoked_at.is_some());
+    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=200", &s.hdrs(), None).await.body;
+    assert!(
+        ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["action"] == "token_request.expired")
+    );
+
+    // The approval page can't be framed by another site.
+    let r = call(&app, LAPTOP, "GET", "/", &[], None).await;
+    assert_eq!(r.headers["x-frame-options"], "DENY");
+    assert!(
+        r.headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors 'none'")
+    );
+}
+
+#[tokio::test]
+async fn station_tokens_rotate_without_the_owner() {
+    let app = test_app();
+    let s = setup(&app).await;
+    add(&app, &s, "OPENAI_API_KEY", &fake("sk-proj-", 'q', 40)).await;
+    let t0 = connect_station(&app, &s, TAGGED, json!({})).await;
+    let h0 = [("authorization", t0.as_str())];
+    let id = app
+        .db
+        .token_list()
+        .unwrap()
+        .into_iter()
+        .find(|t| t.revoked_at.is_none())
+        .unwrap()
+        .id;
+
+    // The Control Deck's setting: 1 hour minimum, or never; logged.
+    let set = |v: Value| json!({ "every_hours": v });
+    assert_eq!(
+        call(&app, TAGGED, "PUT", "/v1/tokens/self/rotation", &h0, Some(set(json!(0))))
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(&app, TAGGED, "PUT", "/v1/tokens/self/rotation", &h0, Some(set(json!(24))))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let me = call(&app, TAGGED, "GET", "/v1/tokens/self", &h0, None).await.body;
+    assert_eq!(me["rotation"]["every_hours"], 24);
+    assert!(me["rotation"]["due_at"].as_i64().unwrap() > crate::db::now_ms());
+    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=50", &s.hdrs(), None).await.body;
+    assert!(
+        ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["action"] == "token.rotation_setting" && e["detail"] == "never -> every 24 h")
+    );
+
+    // Swap: the old token works until the new one's first use.
+    assert_eq!(
+        call(&app, LAPTOP, "POST", "/v1/tokens/self/rotate", &h0, None).await.status,
+        StatusCode::FORBIDDEN,
+        "only from its own machine"
+    );
+    let t1 = format!(
+        "Bearer {}",
+        call(&app, TAGGED, "POST", "/v1/tokens/self/rotate", &h0, None).await.body["token"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &h0, None).await.status,
+        StatusCode::OK,
+        "crash before saving: still working"
+    );
+    // A repeat swap with the old token discards the unused new one.
+    let t2 = format!(
+        "Bearer {}",
+        call(&app, TAGGED, "POST", "/v1/tokens/self/rotate", &h0, None).await.body["token"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &[("authorization", t1.as_str())], None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let h2 = [("authorization", t2.as_str())];
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &h2, None).await.status,
+        StatusCode::OK,
+        "first use promotes it"
+    );
+    let r = call(&app, TAGGED, "GET", "/v1/secrets", &h0, None).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(r.body["code"], "token_replaced", "a stale copy is refused with a clear reason");
+    assert!(call(&app, TAGGED, "GET", "/v1/tokens/self", &h2, None).await.body["rotation"]["last_rotated_at"].is_i64());
+
+    // An unused new token doesn't keep the old one alive past a day.
+    let t3 = call(&app, TAGGED, "POST", "/v1/tokens/self/rotate", &h2, None).await.body["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    app.db
+        .raw()
+        .execute(
+            "UPDATE tokens SET next_issued_at = ?1 WHERE id = ?2",
+            rusqlite::params![crate::db::now_ms() - 25 * 3_600_000, id],
+        )
+        .unwrap();
+    let r = call(&app, TAGGED, "GET", "/v1/secrets", &h2, None).await;
+    assert_eq!(r.body["code"], "token_rotated");
+    let t3 = format!("Bearer {t3}");
+    let h3 = [("authorization", t3.as_str())];
+    assert_eq!(call(&app, TAGGED, "GET", "/v1/secrets", &h3, None).await.status, StatusCode::OK);
+
+    // Overdue (a laptop asleep past its interval): only rotating is allowed, then it carries on.
+    let old = crate::db::now_ms() - 30 * 3_600_000;
+    app.db
+        .raw()
+        .execute(
+            "UPDATE tokens SET created_at = ?1, last_rotated_at = ?1, rotation_changed_at = ?1 WHERE id = ?2",
+            rusqlite::params![old, id],
+        )
+        .unwrap();
+    let r = call(&app, TAGGED, "GET", "/v1/secrets", &h3, None).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.body["code"], "token_overdue");
+    let t4 = format!(
+        "Bearer {}",
+        call(&app, TAGGED, "POST", "/v1/tokens/self/rotate", &h3, None).await.body["token"]
+            .as_str()
+            .unwrap()
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/secrets", &[("authorization", t4.as_str())], None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+
+    // Never-expire tokens are unaffected by all of this.
+    let plain = token(&app, &s, &["list"], &["*"], &[]).await;
+    app.db
+        .raw()
+        .execute("UPDATE tokens SET created_at = ?1 WHERE name = 'test'", rusqlite::params![old])
+        .unwrap();
+    assert_eq!(
+        call(&app, SPARK, "GET", "/v1/secrets", &[("authorization", plain.as_str())], None)
+            .await
+            .status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn exposure_reports_land_on_attention_without_revealing_a_match() {
+    let app = test_app();
+    let s = setup(&app).await;
+    let leaked = fake("sk-proj-", 'L', 40);
+    add(&app, &s, "OPENAI_API_KEY", &leaked).await;
+    let r = add_with(&app, &s, json!({ "name": "BANK_PASSWORD", "value": "correct horse battery" })).await;
+    assert_eq!(r.body["owner_only"], true);
+    let tok = connect_station(&app, &s, TAGGED, json!({})).await;
+    let h = [("authorization", tok.as_str())];
+
+    let report = |v: &str| json!({ "value": v, "place": "a transcript" });
+    let hit = call(&app, TAGGED, "POST", "/v1/attention/report", &h, Some(report(&leaked))).await;
+    let miss = call(
+        &app,
+        TAGGED,
+        "POST",
+        "/v1/attention/report",
+        &h,
+        Some(report("not-a-stored-value-123")),
+    )
+    .await;
+    let hidden = call(
+        &app,
+        TAGGED,
+        "POST",
+        "/v1/attention/report",
+        &h,
+        Some(report("correct horse battery")),
+    )
+    .await;
+    for r in [&hit, &miss, &hidden] {
+        assert_eq!(r.status, StatusCode::ACCEPTED);
+        assert_eq!(r.body, json!({ "received": true }), "the same reply every time");
+    }
+    // The match is made after the reply; the owner sees it on Needs attention.
+    let mut kinds = vec![];
+    for _ in 0..50 {
+        let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
+        kinds = a["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["kind"] == "reported")
+            .map(|i| i["secret"].as_str().unwrap().to_string())
+            .collect();
+        if kinds.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        ["BANK_PASSWORD", "OPENAI_API_KEY"],
+        "owner-only keys are matched too; only the owner sees it"
+    );
+    assert_eq!(
+        call(&app, TAGGED, "GET", "/v1/attention", &h, None).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let listed = call(&app, TAGGED, "GET", "/v1/secrets/OPENAI_API_KEY", &h, None).await.body;
+    assert!(
+        !listed.to_string().contains("reported"),
+        "a token can't see the result through the key either"
+    );
+
+    // Replacing the value clears it.
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/OPENAI_API_KEY",
+        &s.hdrs(),
+        Some(json!({ "value": fake("sk-proj-", 'N', 40), "verify": false })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await.body;
+    assert!(
+        !a["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["kind"] == "reported" && i["secret"] == "OPENAI_API_KEY")
+    );
 }

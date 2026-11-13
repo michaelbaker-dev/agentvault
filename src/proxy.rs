@@ -243,6 +243,8 @@ const STRIP_REQUEST: &[&str] = &[
     // These turn a GET into another method at many providers, which would
     // get round a GET-only token.
     "x-http-method-override",
+    // spandeck's pane label is for the vault's own log only.
+    "x-agentvault-actor",
     "x-http-method",
     "x-method-override",
     "authorization",
@@ -541,7 +543,14 @@ mod tests {
     fn review_hardening_headers_encodings_and_offsets() {
         // Partial replies and method overrides never reach the provider.
         let mut h = HeaderMap::new();
-        for n in ["range", "if-range", "x-http-method-override", "x-http-method", "x-method-override"] {
+        for n in [
+            "range",
+            "if-range",
+            "x-http-method-override",
+            "x-http-method",
+            "x-method-override",
+            "x-agentvault-actor",
+        ] {
             h.insert(HeaderName::from_static(n), HeaderValue::from_static("x"));
         }
         h.insert("accept", HeaderValue::from_static("application/json"));
