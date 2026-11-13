@@ -5,13 +5,14 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | Step | What | Why |
 |---|---|---|
 | 1 | spandeck integration, phase 1: connecting a station | Agents in spandeck panes use keys through the vault without holding them |
-| 2 | spandeck integration, phase 2: station token rotation | Rotation set per station in spandeck's Control Deck, fully automatic |
+| 2 | spandeck integration, phase 2: station token rotation | Optional rotation set per station in spandeck's Control Deck, fully automatic |
 | 3 | Mac version | The vault runs on a Mac as well as Linux |
 | 4 | Moving the vault | Put the vault on another machine without losing keys, tokens or settings |
 | 5 | Hot standby | Agents and apps keep working when the vault's machine goes down |
 | 6 | spandeck integration, phase 3: exposed-key reports | A key spandeck finds in a transcript lands on Needs attention |
+| 7 | spandeck integration, phase 4: approvals inside the Control Deck | Approving a station without leaving the Control Deck |
 
-## 1, 2 and 6. spandeck integration
+## 1, 2, 6 and 7. spandeck integration
 
 The contract, decisions and task lists are agreed with the spandeck project and kept there. In short:
 
@@ -21,12 +22,13 @@ The contract, decisions and task lists are agreed with the spandeck project and 
   - Requests are accepted only from the owner's devices and tagged machines.
   - Tokens are list + proxy only, read-only by default, pinned to the station's stable Tailscale ID, never see owner-only keys, and never expire by default.
   - A label header (`X-AgentVault-Actor`) is recorded and stripped before the provider call.
-- **Phase 2:**
-  - `POST /v1/tokens/self/rotate` swaps a station token for a fresh one, from its own machine only, and the old token is retired after 5 minutes.
-  - `PUT /v1/tokens/self/rotation` records the interval set in the Control Deck.
-  - An overdue token is refused.
-  - A token replaced by someone else's swap is refused, so spandeck can warn the owner.
+- **Phase 2** (rotation is hygiene: a pinned token is useless anywhere but its machine, so "never" is the default):
+  - The rotation setting lives only in spandeck's Control Deck: Never, or every 1 hour or more. There's no passphrase and no other page; spandeckd reports it with `PUT /v1/tokens/self/rotation`, and the vault logs every change.
+  - `POST /v1/tokens/self/rotate` swaps a station token for a fresh one, from its own machine only, and is allowed even when the token is overdue (an overdue token can do nothing else).
+  - The old token keeps working until the new one is first used, 24 hours at most, so a crash before spandeckd saves the new token can't lock the station out. Swapping again with the old token discards the unused new one.
+  - spandeck alerts the owner when the vault's setting differs from the Control Deck's, or when someone else swapped the station's token.
 - **Phase 3:** `POST /v1/attention/report` takes a value seen in a transcript, matches it, discards it and always gives the same reply.
+- **Phase 4:** the approval page can be shown as a panel embedded in the Control Deck. The vault allows exactly the Control Deck's address to embed it and refuses every other site; its sign-in has to work inside the panel without weakening the protection against forged requests. The passphrase is still typed only into the vault's own panel.
 
 ## 3. Mac version
 
