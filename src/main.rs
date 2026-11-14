@@ -70,6 +70,15 @@ enum Cmd {
         #[arg(short, long)]
         config: PathBuf,
     },
+    /// Ask Tailscale which device and user an address belongs to, the way the
+    /// vault identifies callers. Checks the vault can see Tailscale.
+    Whois {
+        /// A tailnet address, e.g. 100.101.102.103
+        addr: std::net::IpAddr,
+        /// Tailscale's socket (Linux, open-source tailscaled); the Mac apps are found without it.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Show what importing a key file would create, with every value masked.
     /// Reads the file locally; nothing is stored or sent anywhere.
     ImportPreview { file: PathBuf },
@@ -290,6 +299,12 @@ async fn main() -> ExitCode {
         }),
         Cmd::CheckConfig { config } => Config::load(&config).map(|cfg| println!("ok: {} on {}", cfg.origin(), cfg.listen)),
         Cmd::ImportPreview { file } => import_preview(&file),
+        Cmd::Whois { addr, socket } => {
+            let socket = socket.unwrap_or_else(config::default_socket);
+            identity::whois(&socket, SocketAddr::new(addr, 0)).await.map(|c| {
+                println!("{}", serde_json::to_string_pretty(&c).expect("json"));
+            })
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

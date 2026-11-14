@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -98,15 +98,97 @@ impl Resolver {
     }
 }
 
-async fn whois(socket: &PathBuf, addr: SocketAddr) -> Result<Caller, String> {
-    let mut stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .map_err(|e| format!("connecting to tailscaled: {e}"))?;
+/// Where Tailscale's local API is. Linux and the open-source tailscaled use a
+/// Unix socket. The Mac apps listen on a localhost port instead, guarded by a
+/// password in a "same user proof" file that only root and admin accounts
+/// (standalone edition) or the logged-in user (App Store edition) can read.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalApi {
+    Unix(PathBuf),
+    Tcp { port: u16, token: String },
+}
+
+/// Looked up on every call: the Mac apps pick a new port and password when
+/// Tailscale restarts.
+fn local_api(socket: &Path) -> Result<LocalApi, String> {
+    if cfg!(not(target_os = "macos")) || socket.exists() {
+        return Ok(LocalApi::Unix(socket.to_path_buf()));
+    }
+    mac_local_api().ok_or_else(|| {
+        format!(
+            "can't find Tailscale's local API: no socket at {}, and no Tailscale app port \
+             (/Library/Tailscale/ipnport, or the App Store app's group container) this account can read",
+            socket.display()
+        )
+    })
+}
+
+fn mac_local_api() -> Option<LocalApi> {
+    // Standalone edition (from tailscale.com): the port is a symlink's target,
+    // the password is in sameuserproof-PORT next to it.
+    let dir = Path::new("/Library/Tailscale");
+    if let Ok(target) = std::fs::read_link(dir.join("ipnport"))
+        && let Ok(port) = target.to_string_lossy().parse::<u16>()
+        && let Ok(token) = std::fs::read_to_string(dir.join(format!("sameuserproof-{port}")))
+        && !token.trim().is_empty()
+    {
+        return Some(LocalApi::Tcp {
+            port,
+            token: token.trim().to_string(),
+        });
+    }
+    // App Store edition: both are in a file name in the app's group container,
+    // sameuserproof-PORT-PASSWORD.
+    let groups = Path::new(&std::env::var_os("HOME")?).join("Library/Group Containers");
+    for entry in std::fs::read_dir(groups).ok()?.flatten() {
+        if !entry.file_name().to_string_lossy().ends_with("io.tailscale.ipn.macos") {
+            continue;
+        }
+        for f in std::fs::read_dir(entry.path()).into_iter().flatten().flatten() {
+            if let Some(api) = parse_proof_name(&f.file_name().to_string_lossy()) {
+                return Some(api);
+            }
+        }
+    }
+    None
+}
+
+fn parse_proof_name(name: &str) -> Option<LocalApi> {
+    let (port, token) = name.strip_prefix("sameuserproof-")?.split_once('-')?;
+    let port = port.parse().ok()?;
+    (!token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric())).then(|| LocalApi::Tcp {
+        port,
+        token: token.to_string(),
+    })
+}
+
+async fn local_api_get<S: AsyncReadExt + AsyncWriteExt + Unpin>(mut stream: S, path: &str, auth: &str) -> Result<Vec<u8>, String> {
     // HTTP/1.0 so the reply is never chunked and ends at EOF.
-    let req = format!("GET /localapi/v0/whois?addr={addr} HTTP/1.0\r\nHost: local-tailscaled.sock\r\nSec-Tailscale: localapi\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.0\r\nHost: local-tailscaled.sock\r\nSec-Tailscale: localapi\r\n{auth}\r\n");
     stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     stream.take(1 << 20).read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+pub async fn whois(socket: &Path, addr: SocketAddr) -> Result<Caller, String> {
+    let path = format!("/localapi/v0/whois?addr={addr}");
+    let buf = match local_api(socket)? {
+        LocalApi::Unix(p) => {
+            let s = tokio::net::UnixStream::connect(&p)
+                .await
+                .map_err(|e| format!("connecting to tailscaled: {e}"))?;
+            local_api_get(s, &path, "").await?
+        }
+        LocalApi::Tcp { port, token } => {
+            use base64::Engine;
+            let s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .map_err(|e| format!("connecting to the Tailscale app: {e}"))?;
+            let basic = base64::engine::general_purpose::STANDARD.encode(format!(":{token}"));
+            local_api_get(s, &path, &format!("Authorization: Basic {basic}\r\n")).await?
+        }
+    };
     let text = String::from_utf8_lossy(&buf);
     let (head, body) = text.split_once("\r\n\r\n").ok_or("malformed tailscaled reply")?;
     let status = head.lines().next().unwrap_or("");
@@ -131,4 +213,37 @@ async fn whois(socket: &PathBuf, addr: SocketAddr) -> Result<Caller, String> {
         user: w.user.login_name,
         tags: w.node.tags.unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_the_mac_apps_local_api_from_the_proof_file_name() {
+        assert_eq!(
+            parse_proof_name("sameuserproof-49480-AbC123xyz"),
+            Some(LocalApi::Tcp {
+                port: 49480,
+                token: "AbC123xyz".into()
+            })
+        );
+        for bad in [
+            "sameuserproof-49480",
+            "sameuserproof-x-abc",
+            "sameuserproof-1-a/b",
+            "other-1-abc",
+            "sameuserproof-70000-abc",
+        ] {
+            assert_eq!(parse_proof_name(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn linux_always_uses_the_socket() {
+        if cfg!(not(target_os = "macos")) {
+            let p = Path::new("/nonexistent/tailscaled.sock");
+            assert_eq!(local_api(p), Ok(LocalApi::Unix(p.to_path_buf())));
+        }
+    }
 }

@@ -145,7 +145,12 @@ impl Config {
     }
 }
 
-fn default_socket() -> PathBuf {
+pub fn default_socket() -> PathBuf {
+    // The open-source tailscaled's socket on macOS; the Mac apps are found
+    // without it (see identity.rs).
+    if cfg!(target_os = "macos") {
+        return PathBuf::from("/var/run/tailscaled.socket");
+    }
     PathBuf::from("/var/run/tailscale/tailscaled.sock")
 }
 fn default_retention() -> u32 {
