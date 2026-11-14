@@ -1171,11 +1171,11 @@ fn claude_state(app: &AppRef) -> ApiResult<(&'static str, Option<String>)> {
     };
     Ok(match app.db.secret_get(n)? {
         None => ("missing", Some(format!("add your Anthropic API key as a secret named {n}"))),
-        Some(m) if m.provider.as_deref() != Some("anthropic") => (
+        Some(m) if m.provider.as_deref() != Some("anthropic") && m.provider_hint.as_deref() != Some("anthropic") => (
             "unrecognised",
             Some(format!(
-                "{n} isn't recognised as an Anthropic API key. They start with sk-ant-api03- and are 108 characters long, \
-                 so check it was pasted whole"
+                "{n} isn't recognised as an Anthropic API key (they usually start with sk-ant-api03-). If it is one, \
+                 open it with Edit and set its type to Anthropic API key"
             )),
         ),
         Some(_) => ("ready", None),

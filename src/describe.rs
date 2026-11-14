@@ -489,10 +489,12 @@ async fn claude_describe(app: &AppRef, input: &Value) -> Result<ClaudeOut, Strin
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("add an Anthropic key named {key_name} to enable Claude descriptions"))?;
     let key = app.reveal(&meta).map_err(|e| e.msg)?;
-    // Only ever send a value that is recognisably an Anthropic key to Anthropic.
+    // Only ever send Anthropic a value that is recognisably an Anthropic key,
+    // or one the owner has said is one (a format the vault doesn't know yet).
     // Checked on the value itself, so a key pasted again works at once (its
     // stored provider is only updated once it has been described).
-    if providers::detect(&key.value, "").map(|p| p.id) != Some("anthropic") {
+    let owner_says = meta.provider_hint.as_deref() == Some("anthropic");
+    if !owner_says && providers::detect(&key.value, "").map(|p| p.id) != Some("anthropic") {
         return Err(format!("{key_name} isn't recognised as an Anthropic API key"));
     }
 

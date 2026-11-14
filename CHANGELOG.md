@@ -5,6 +5,7 @@
 - **Describe … keys with Claude** in Settings: Claude describes every key that still has a built-in description, such as keys added before your Anthropic key was in the vault (`POST /v1/describe-all`).
 - **Weekly provider checks:** each key is checked with its provider again once a week (three a minute at most), so a key that was revoked, expired or ran out of credit shows under Needs attention on its own. A changed result gets a fresh description; the check doesn't count as a use of the key.
 - Settings no longer says Claude is on when the key named for it isn't an Anthropic API key (for example one cut short when pasted); it says why, and the Secrets page does too. The describer checks the key's value itself, so a key pasted again works at once.
+- An Anthropic key in a format the vault doesn't recognise yet can still power Claude descriptions once you set its **Service** to Anthropic API key: your choice counts, and Settings says how.
 - Describing a key again without asking its provider keeps the provider's last answer instead of dropping it.
 - The Mac download can be signed with a Developer ID and notarized by Apple (see docs/releasing.md): it then opens even when downloaded in a browser, and automatic unlock survives upgrades. Without the signing secrets it stays ad-hoc signed, as before.
 - The Mac installer keeps the stored passphrase on upgrade when the old and new program carry the same Developer ID signature, and only asks for a sign-in after upgrades between other builds.

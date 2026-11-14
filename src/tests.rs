@@ -3284,7 +3284,7 @@ async fn settings_say_why_claude_is_off_and_describe_all_catches_up_older_keys()
     let d = describer(&app, &s).await;
     assert_eq!(d["claude_state"], "unrecognised");
     assert_eq!(d["claude_ready"], false);
-    assert!(d["claude_problem"].as_str().unwrap().contains("108 characters"), "{d}");
+    assert!(d["claude_problem"].as_str().unwrap().contains("set its type"), "{d}");
     let r = call(&app, LAPTOP, "POST", "/v1/describe-all", &s.hdrs(), Some(json!({}))).await;
     assert_eq!(r.status, StatusCode::CONFLICT, "{:?}", r.body);
     assert!(
@@ -3379,4 +3379,39 @@ async fn the_weekly_check_finds_keys_that_stopped_working() {
     // Checked once, not counted twice: the fresh description reused the result.
     assert_eq!(verifies(&f), before + 1);
     assert!(m["description"].as_str().unwrap().contains("rejected"), "{m}");
+}
+
+#[tokio::test]
+async fn an_anthropic_key_in_a_format_the_vault_doesnt_know_works_once_the_owner_says_so() {
+    let (ep, f) = fake::start().await;
+    let base = test_app_with(ep);
+    let mut cfg = base.cfg.clone();
+    cfg.describe.claude_secret = Some("ANTHROPIC_API_KEY".into());
+    let app = Arc::new(App {
+        cfg,
+        endpoints: base.endpoints.clone(),
+        ..clone_app(&base)
+    });
+    let s = setup(&app).await;
+    add(&app, &s, "ANTHROPIC_API_KEY", &fake("sk-ant-new07_", 'k', 93)).await;
+    wait_described(&app, &s, "ANTHROPIC_API_KEY").await;
+    assert_eq!(describer(&app, &s).await["claude_state"], "unrecognised");
+    assert!(
+        !f.lock().unwrap().calls.iter().any(|c| c.contains("messages")),
+        "not sent while unrecognised"
+    );
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/ANTHROPIC_API_KEY",
+        &s.hdrs(),
+        Some(json!({ "provider": "anthropic" })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let m = wait_described(&app, &s, "ANTHROPIC_API_KEY").await;
+    assert_eq!(m["provider"], "anthropic", "{m}");
+    assert_eq!(m["describe_status"], "described by Claude", "{m}");
+    assert_eq!(describer(&app, &s).await["claude_state"], "ready");
 }
