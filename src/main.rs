@@ -116,14 +116,18 @@ fn import_preview(file: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Keeps key material out of core dumps and blocks ptrace and /proc/<pid>/mem
-/// reads by other processes of the same user. This doesn't protect the config,
-/// passphrase file or TLS key on disk, so run the service as its own system
-/// user (deploy/install.sh does).
+/// Keeps key material out of core dumps and blocks debuggers (ptrace, and on
+/// Linux /proc/<pid>/mem reads) from other processes of the same user. This
+/// doesn't protect the config, passphrase file or TLS key on disk, so run the
+/// service as its own system user (deploy/install.sh does).
 fn harden_process() {
     // SAFETY: plain libc calls with valid arguments; no memory is shared.
     unsafe {
+        #[cfg(target_os = "linux")]
         libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+        // macOS: refuse debugger attachment for the life of the process.
+        #[cfg(target_os = "macos")]
+        libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0);
         let none = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
         libc::setrlimit(libc::RLIMIT_CORE, &none);
         libc::umask(0o077);

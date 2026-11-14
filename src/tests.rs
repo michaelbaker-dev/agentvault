@@ -416,7 +416,7 @@ async fn token_scopes_globs_pinning_and_revocation() {
 
     let list = call(&app, LAPTOP, "GET", "/v1/tokens", &s.hdrs(), None).await;
     let id = list.body["tokens"][0]["id"].as_i64().unwrap();
-    assert!(list.body.to_string().find("kt_").is_none(), "token list never shows token values");
+    assert!(!list.body.to_string().contains("kt_"), "token list never shows token values");
     assert_eq!(
         call(&app, LAPTOP, "DELETE", &format!("/v1/tokens/{id}"), &s.hdrs(), None)
             .await
