@@ -22,6 +22,7 @@ The owner keeps their API keys in a vault on their Tailscale network. You can us
 - Send read-only requests (GET) unless the user asked for a change. Before anything that spends money, sends messages, deletes things or changes production, check the key's `risk` with describe and confirm with the user.
 - Some keys are owner-only by design: passwords, wallet keys, and the "manager" keys used for rotation. They're invisible to you, and a 404 for them is expected. The owner uses those through the web interface.
 - If a key is marked exposed or rejected, mention it to the user. Replacing it is done with **Rotate** in the web interface.
+- A **UniFi console API key (local)** works only on its own console's network: the vault can't check or proxy it from elsewhere. Use it with `agentvault-cli run` from a machine on that network (needs the read scope), and pass it to tools through their input, not on the command line.
 
 ## Helper commands
 
@@ -30,7 +31,7 @@ The owner keeps their API keys in a vault on their Tailscale network. You can us
 | `agentvault-cli check` | Shows whether the vault is reachable and unlocked, and how many keys this token can use. |
 | `agentvault-cli list [word]` | Lists usable keys with provider, risk and whether the proxy can reach them. No values. |
 | `agentvault-cli describe NAME` | Shows what a key is for, its account, its risk, and `proxy_target` (the address `call` paths are relative to). |
-| `agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'K: V'] [-d JSON or @file]` | Calls the provider through the vault. Example: `agentvault-cli call OPENAI_API_KEY /v1/models` |
+| `agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'K: V'] [-d JSON or @file]` | Calls the provider through the vault, showing how long the vault and the provider each took. Example: `agentvault-cli call OPENAI_API_KEY /v1/models` |
 | `agentvault-cli run NAME[=ENVVAR] ... -- COMMAND` | Runs a program with the key in its environment, with the value blanked out of its output. Needs a token with the read scope. Use it for running the user's own code or tests. |
 | `agentvault-cli github-push OWNER/REPO [--branch B] [-C DIR] [--dry-run]` | Pushes a local branch to GitHub through the vault. See "Pushing to GitHub" below. |
 
@@ -89,3 +90,5 @@ Tell the user that each app should get its own token from the web interface (**T
 1. In the vault's web interface, under **Tokens**, make a token with the preset **Claude / agents** (list + proxy, GET-only), tied to this machine. Add the read scope only if `agentvault-cli run` is wanted.
 2. In their own terminal, not through you, run `~/.claude/skills/agentvault/scripts/agentvault-cli setup`. It asks for the token without showing it, checks it, saves it for the helper, and connects Claude Code's MCP server for all projects.
 3. Restart Claude Code.
+
+**Several projects on one machine:** each can have its own token, so the vault's log shows which project did what and one can be revoked alone. The owner makes a token per project and runs `agentvault-cli setup --project` inside each project's folder. `agentvault-cli check` says which token is in use.

@@ -404,6 +404,14 @@ pub async fn fetch_download(from: &Url, location: &str) -> Result<reqwest::Respo
     Err("the download link redirected too many times".into())
 }
 
+/// A `Server-Timing` value splitting a proxied call's time between the vault
+/// (checks, unlocking the key) and the provider (until its reply started).
+pub fn server_timing(vault: Duration, provider: Duration) -> HeaderValue {
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    HeaderValue::from_str(&format!("agentvault;dur={:.1}, provider;dur={:.1}", ms(vault), ms(provider)))
+        .unwrap_or_else(|_| HeaderValue::from_static("agentvault"))
+}
+
 /// Sends the request. Returns the upstream response and the time to its headers.
 pub async fn send(
     http: &reqwest::Client,
@@ -646,6 +654,12 @@ fn lower_hex(enc: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn server_timing_splits_vault_and_provider_time() {
+        let v = server_timing(Duration::from_micros(2_345), Duration::from_millis(160));
+        assert_eq!(v.to_str().unwrap(), "agentvault;dur=2.3, provider;dur=160.0");
+    }
+
     #[test]
     fn download_links_never_reach_private_addresses() {
         for ip in [

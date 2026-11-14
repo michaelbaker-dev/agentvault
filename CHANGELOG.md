@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+### Since the first helper changes
+
+- `github-push` sends text files inside each commit's tree request (about two requests per commit instead of one per file; a 183-file push went from 71 s to 9 s), waits and retries when GitHub asks to slow down, and carries on from a push into an empty repository that stopped partway.
+- Proxied replies carry a `Server-Timing` header (`agentvault` and `provider` durations); MCP results include `timing_ms`; `agentvault-cli call` shows both.
+- New key type **UniFi console API key (local)**, told apart from Site Manager keys by words in the name (network API, protect, console, UDM...). It isn't checked against Ubiquiti's cloud, so local keys no longer show as rejected.
+- `agentvault-cli setup --project [NAME]`: a token used only in one project's folder (helper and that project's Claude Code), so the log shows each project and each can be revoked alone.
+
 ### Helper
 
 - `agentvault-cli github-push OWNER/REPO` pushes a branch to GitHub through the vault's proxy: no SSH key or git credentials on the machine, and the key never leaves the vault. Commits are recreated exactly and checked; fast-forward only; works on empty repositories. The skill and the MCP server's instructions point agents to it.

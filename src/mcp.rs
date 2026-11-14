@@ -222,6 +222,7 @@ async fn call_tool(app: &AppRef, p: &Principal, tool: &str, args: &Value) -> (Va
 }
 
 async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option<EventInfo>) {
+    let started = std::time::Instant::now();
     let name = args.get("secret").and_then(Value::as_str).unwrap_or("").to_string();
     let method_s = args.get("method").and_then(Value::as_str).unwrap_or("GET").to_ascii_uppercase();
     let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_string();
@@ -314,6 +315,7 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     let mut redactor = proxy::Redactor::for_creds(&creds, &target.auth);
     redactor.extend(&stored.secrets());
     let is_get = method == Method::GET;
+    let vault_time = started.elapsed();
     let sent_to = url.clone();
     let (mut resp, upstream) = match proxy::send(&app.http, &target, &creds, method, url, headers, body).await {
         Ok(r) => r,
@@ -368,6 +370,8 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
         Err(_) => format!("[binary body, {} bytes]", bytes.len()),
     };
     let mut out = json!({ "status": status, "content_type": content_type, "truncated": truncated, "body": text });
+    let ms = |d: std::time::Duration| (d.as_secs_f64() * 10_000.0).round() / 10.0;
+    out["timing_ms"] = json!({ "vault": ms(vault_time), "provider": ms(upstream) });
     if let Some(host) = download {
         out["downloaded_from"] = json!(host);
     }

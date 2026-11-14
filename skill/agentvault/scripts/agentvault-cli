@@ -3,6 +3,9 @@
 
   agentvault-cli setup                      save the vault address and a token (asked for without
                                             showing it), check them, and connect Claude Code's MCP
+  agentvault-cli setup --project [NAME]     the same, but the token is used only in this folder
+                                            (and below), so each project shows up and can be
+                                            revoked on its own
   agentvault-cli check                      is the vault reachable, unlocked, and the token working?
   agentvault-cli list [WORD]                keys this token may use (no values)
   agentvault-cli describe NAME              what one key is for, its risk, and how the proxy reaches it
@@ -33,6 +36,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -73,10 +77,38 @@ def safe_vault_url(url, saved):
     return parts.scheme == "https" and bool(host) and (host.endswith(".ts.net") or url.rstrip("/") == saved.rstrip("/"))
 
 
-def settings():
+PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def projects():
+    """Folders that have their own token: {absolute folder: token name}."""
+    try:
+        with open(f"{CONF}/projects.json") as f:
+            return {k: v for k, v in json.load(f).items() if isinstance(v, str) and PROJECT_NAME.match(v)}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def project_token(cwd=None):
+    """The project token for this folder (or the closest folder above it that
+    has one), as (name, file); (None, None) if it uses the shared token."""
+    here = os.path.realpath(cwd or os.getcwd())
+    best = None
+    for folder, name in projects().items():
+        if (here == folder or here.startswith(folder.rstrip("/") + "/")) and (not best or len(folder) > len(best[0])):
+            best = (folder, name)
+    return (best[1], f"{CONF}/tokens/{best[1]}") if best else (None, None)
+
+
+def settings(token_name=None):
     saved = open(f"{CONF}/url").read().strip() if os.path.exists(f"{CONF}/url") else ""
     url = env("URL") or saved
-    token_file = env("TOKEN_FILE") or f"{CONF}/token"
+    if token_name:
+        if not PROJECT_NAME.match(token_name):
+            die(f"Not a token name: {token_name}")
+        token_file = f"{CONF}/tokens/{token_name}"
+    else:
+        token_file = env("TOKEN_FILE") or project_token()[1] or f"{CONF}/token"
     token = open(token_file).read().strip() if os.path.exists(token_file) else ""
     if not url or not token:
         die(SETUP)
@@ -156,7 +188,9 @@ def cmd_check(_):
     if st.get("sealed"):
         die(f"The vault is locked. The owner unlocks it by signing in at {url}")
     n = len(request("GET", "/v1/secrets")["secrets"])
-    print(f"OK: {url} is unlocked; this token can see {n} key(s).")
+    name = project_token()[0] if not env("TOKEN_FILE") else None
+    which = f"project '{name}' token" if name else "token"
+    print(f"OK: {url} is unlocked; this {which} can see {n} key(s).")
 
 
 def cmd_list(args):
@@ -256,7 +290,9 @@ def cmd_call(args):
             die(f"Couldn't fetch the download link: {getattr(e, 'reason', e)}")
     elif location:
         print(f"Location: {location}")
-    print(f"HTTP {status}  {ctype}")
+    timing = dict(re.findall(r"(agentvault|provider);dur=([0-9.]+)", hdrs.get("Server-Timing", "")))
+    took = f"  (vault {float(timing['agentvault']):.0f} ms, provider {float(timing['provider']):.0f} ms)" if len(timing) == 2 else ""
+    print(f"HTTP {status}  {ctype}{took}")
     shown = text[:MAX_SHOW].decode("utf-8", "replace")
     if "json" in ctype:
         try:
@@ -295,10 +331,12 @@ def redaction_forms(secrets):
     return sorted((f for f in forms if len(f) >= 6), key=len, reverse=True)
 
 
-def cmd_mcp_headers(_):
+def cmd_mcp_headers(args):
     """Prints the Authorization header for Claude Code's headersHelper, so the
-    token stays in its 0600 file instead of Claude Code's settings or argv."""
-    _, token = settings()
+    token stays in its 0600 file instead of Claude Code's settings or argv.
+    `--token NAME` uses a project's token (set up with `setup --project`)."""
+    name = args[1] if len(args) == 2 and args[0] == "--token" else None
+    _, token = settings(name)
     print(json.dumps({"Authorization": f"Bearer {token}"}))
 
 
@@ -361,6 +399,14 @@ def cmd_setup(args):
     history or a chat, checks it, saves it and registers the MCP server."""
     global CONF
     no_mcp = "--no-mcp" in args
+    project = None
+    if "--project" in args:
+        i = args.index("--project")
+        nxt = args[i + 1] if i + 1 < len(args) and not args[i + 1].startswith("--") else None
+        project = nxt or re.sub(r"[^A-Za-z0-9._-]", "-", os.path.basename(os.path.realpath(os.getcwd())))
+        if not PROJECT_NAME.match(project):
+            die("A project name uses letters, digits, '.', '_' and '-'. Pass one: setup --project NAME")
+        print(f"Setting up a token for project '{project}', used only in {os.path.realpath(os.getcwd())} and the folders inside it.")
     saved = open(f"{CONF}/url").read().strip() if os.path.exists(f"{CONF}/url") else ""
     default = env("URL") or saved
     url = input(f"Vault address [{default}]: " if default else "Vault address (https://...): ").strip() or default
@@ -383,7 +429,17 @@ def cmd_setup(args):
     os.makedirs(CONF, mode=0o700, exist_ok=True)
     with open(f"{CONF}/url", "w") as f:
         f.write(url + "\n")
-    path = env("TOKEN_FILE") or f"{CONF}/token"
+    if project:
+        os.makedirs(f"{CONF}/tokens", mode=0o700, exist_ok=True)
+        path = f"{CONF}/tokens/{project}"
+        mapping = projects()
+        mapping = {k: v for k, v in mapping.items() if v != project}
+        mapping[os.path.realpath(os.getcwd())] = project
+        fdm = os.open(f"{CONF}/projects.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fdm, "w") as f:
+            json.dump(mapping, f, indent=2)
+    else:
+        path = env("TOKEN_FILE") or f"{CONF}/token"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -396,17 +452,24 @@ def cmd_setup(args):
             print("Claude Code isn't installed here, so MCP wasn't set up. The helper works on its own.")
         return
     token = ""
+    scope = "local" if project else "user"
     # Replace this or an older registration (named "keys" before the rename).
     for old in ("agentvault", "keys"):
-        subprocess.run([claude, "mcp", "remove", "--scope", "user", old], capture_output=True)
+        subprocess.run([claude, "mcp", "remove", "--scope", scope, old], capture_output=True)
     # Claude Code asks this helper for the header on each connection, so the
     # token never appears on a command line or in Claude Code's settings file.
-    helper = shlex.quote(os.path.abspath(sys.argv[0])) + " mcp-headers"
+    helper = shlex.quote(os.path.abspath(sys.argv[0])) + " mcp-headers" + (f" --token {project}" if project else "")
     config = json.dumps({"type": "http", "url": url + "/mcp", "headersHelper": helper})
-    r = subprocess.run([claude, "mcp", "add-json", "--scope", "user", "agentvault", config], capture_output=True, text=True)
+    r = subprocess.run([claude, "mcp", "add-json", "--scope", scope, "agentvault", config], capture_output=True, text=True)
     if r.returncode != 0:
         die("Saving worked, but adding the MCP server to Claude Code failed. Try again, or use the helper on its own.")
-    print("Claude Code's MCP server 'agentvault' is set up for all your projects.")
+    if project:
+        print(f"Claude Code's MCP server 'agentvault' uses this token in this project only (it overrides the shared one here).")
+        if subprocess.run([claude, "mcp", "get", "keys"], capture_output=True).returncode == 0:
+            print("Note: an older server named 'keys' is still set up for all projects with the shared token. "
+                  "Run `agentvault-cli setup` once (without --project) to replace it.")
+    else:
+        print("Claude Code's MCP server 'agentvault' is set up for all your projects.")
     print("Restart Claude Code to load it (in a session: exit, then run `claude --continue`).")
 
 
@@ -417,8 +480,10 @@ def cmd_setup(args):
 # check that GitHub computed the same commit ID, then fast-forward the branch.
 # The vault adds the key; nothing here ever holds it.
 
+INLINE_LIMIT = 5 * 1024 * 1024  # text sent inside one tree request, under the vault's 10 MB limit
 MAX_BLOB = 7 * 1024 * 1024  # base64 of this fits under the vault's 10 MB request limit
 PLACEHOLDER = ".agentvault-push-placeholder"
+PLACEHOLDER_MESSAGE = "Placeholder (replaced by agentvault-cli github-push)"
 
 
 def _git(repo, *args, binary=False, check=True):
@@ -446,6 +511,23 @@ def _github(key, method, path, body=None):
     except ValueError:
         data = None
     return status, data
+
+
+def _gh_write(key, path, body):
+    """POSTs something GitHub creates, waiting and retrying (up to about five
+    minutes) when GitHub asks the account to slow down."""
+    for attempt in range(6):
+        status, data = _github(key, "POST", path, body)
+        msg = (data or {}).get("message", "") if isinstance(data, dict) else ""
+        if status in (403, 429) and "rate limit" in msg.lower() and attempt < 5:
+            wait = 60 if "secondary" in msg.lower() else 30
+            print(f"  GitHub asked to slow down; waiting {wait} s and trying again")
+            time.sleep(wait)
+            continue
+        if status not in (200, 201):
+            die(f"GitHub said {status} for POST {path}: {msg}")
+        return data
+    die("GitHub kept asking to slow down. Nothing was pushed; try again in a few minutes.")
 
 
 def _gh_ok(key, method, path, body=None, ok=(200, 201)):
@@ -550,6 +632,13 @@ def cmd_github_push(args):
     remote = ref["object"]["sha"] if status == 200 else None
     if status not in (200, 404, 409):
         die(f"GitHub said {status} reading {branch}: {(ref or {}).get('message', '')}")
+    placeholder = None
+    if remote and not _git_ok(repo, "cat-file", "-e", f"{remote}^{{commit}}"):
+        # An earlier push into an empty repository stopped partway and left
+        # its throwaway first commit: carry on as if the repository were empty.
+        st3, top = _github(key, "GET", f"{R}/git/commits/{remote}")
+        if st3 == 200 and not top.get("parents") and top.get("message", "").startswith(PLACEHOLDER_MESSAGE):
+            placeholder, remote, empty = remote, None, True
 
     base = None
     if remote:
@@ -576,40 +665,56 @@ def cmd_github_push(args):
             print(f"  would send {c[:7]} {_git(repo, 'log', '-1', '--format=%s', c).strip()[:70]}")
         return
 
-    placeholder = None
-    if empty:
+    if empty and not placeholder:
         # GitHub's Git Data API refuses an empty repository, so make a
         # throwaway first commit; the branch is moved off it below.
         made = _gh_ok(key, "PUT", f"{R}/contents/{PLACEHOLDER}",
-                      {"message": "Placeholder (replaced by agentvault-cli github-push)", "content": base64.b64encode(b"placeholder\n").decode()})
+                      {"message": PLACEHOLDER_MESSAGE, "content": base64.b64encode(b"placeholder\n").decode()})
         placeholder = made["commit"]["sha"]
 
-    sent_blobs = set()
+    # Work out every commit to create. GitHub limits how fast an account
+    # creates content (about 80 items a minute), so text files go inside each
+    # commit's tree request instead of one request per file; binary files are
+    # sent separately. A commit is then about two requests, in order.
+    plan = []
     for c in commits:
         if not base and not empty and _github(key, "GET", f"{R}/git/commits/{c}")[0] == 200:
             print(f"  {c[:7]} already on GitHub")
             continue
+        plan.append(c)
+    on_github = set()
+    for c in plan:
         fields = _commit_fields(repo, c)
-        have = set(sent_blobs)
         for p in fields["parents"]:
-            have.update(e["sha"] for e in _tree_entries(repo, p) if e["type"] == "blob")
-        entries, n = _tree_entries(repo, c), 0
-        for e in entries:
-            if e["type"] != "blob" or e["sha"] in have:
+            on_github.update(e["sha"] for e in _tree_entries(repo, p) if e["type"] == "blob")
+        entries, inline_bytes, n = [], 0, 0
+        for e in _tree_entries(repo, c):
+            if e["type"] != "blob" or e["sha"] in on_github:
+                entries.append(e)
                 continue
-            data = _git(repo, "cat-file", "blob", e["sha"], binary=True)
-            if len(data) > MAX_BLOB:
-                die(f"{e['path']} is {len(data) // 1048576} MB; the vault's proxy takes files up to 7 MB. Push this one with git push or Git LFS.")
-            b = _gh_ok(key, "POST", f"{R}/git/blobs", {"content": base64.b64encode(data).decode(), "encoding": "base64"})
-            if b["sha"] != e["sha"]:
-                die(f"GitHub stored {e['path']} differently ({b['sha'][:7]} instead of {e['sha'][:7]}). Nothing was pushed.")
-            have.add(e["sha"])
-            sent_blobs.add(e["sha"])
             n += 1
-        t = _gh_ok(key, "POST", f"{R}/git/trees", {"tree": entries})
+            data = _git(repo, "cat-file", "blob", e["sha"], binary=True)
+            text = None
+            if b"\0" not in data and inline_bytes + len(data) <= INLINE_LIMIT:
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+            if text is not None:
+                entries.append({"path": e["path"], "mode": e["mode"], "type": "blob", "content": text})
+                inline_bytes += len(data)
+            else:
+                if len(data) > MAX_BLOB:
+                    die(f"{e['path']} is {len(data) // 1048576} MB; the vault's proxy takes files up to 7 MB. Push this one with git push or Git LFS.")
+                b = _gh_write(key, f"{R}/git/blobs", {"content": base64.b64encode(data).decode(), "encoding": "base64"})
+                if b["sha"] != e["sha"]:
+                    die(f"GitHub stored {e['path']} differently ({b['sha'][:7]} instead of {e['sha'][:7]}). Nothing was pushed.")
+                entries.append(e)
+            on_github.add(e["sha"])
+        t = _gh_write(key, f"{R}/git/trees", {"tree": entries})
         if t["sha"] != fields["tree"]:
-            die(f"GitHub built a different tree for {c[:7]}. Nothing was pushed.")
-        k = _gh_ok(key, "POST", f"{R}/git/commits", fields)
+            die(f"GitHub built different files for {c[:7]} ({t['sha'][:7]} instead of {fields['tree'][:7]}). Nothing was pushed.")
+        k = _gh_write(key, f"{R}/git/commits", fields)
         if k["sha"] != c:
             die(f"GitHub recreated {c[:7]} as {k['sha'][:7]} (different author details, date or signature?). Nothing was pushed.")
         print(f"  sent {c[:7]} ({n} new file version(s)) {fields['message'].splitlines()[0][:60] if fields['message'] else ''}")

@@ -1294,6 +1294,7 @@ async fn proxy_request(
     RawQuery(query): RawQuery,
     body: Bytes,
 ) -> ApiResult {
+    let started = std::time::Instant::now();
     let p = app.authenticate(&headers, &caller)?;
     // spandeck names the pane that asked. It is recorded as a label the
     // caller reported, never used for a permission decision, and stripped
@@ -1332,6 +1333,7 @@ async fn proxy_request(
         fields: &meta.fields,
     };
     let fwd = proxy::forward_request_headers(&headers, &target.auth);
+    let vault_time = started.elapsed();
     let (resp, upstream) = proxy::send(&app.http, &target, &creds, method, url, fwd, body)
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e).event(ev.clone()))?;
@@ -1345,6 +1347,10 @@ async fn proxy_request(
     let mut out = Response::new(Body::from_stream(proxy::redact_stream(resp.bytes_stream(), redactor)));
     *out.status_mut() = status;
     *out.headers_mut() = resp_headers;
+    out.headers_mut().append(
+        axum::http::HeaderName::from_static("server-timing"),
+        proxy::server_timing(vault_time, upstream),
+    );
     Ok(with_event(out, ev.upstream(upstream)))
 }
 

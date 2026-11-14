@@ -2,16 +2,19 @@
 
 What's planned next for AgentVault, in order. Each step ships with tests, README updates and a CHANGELOG entry.
 
-| Step | What | Why |
+| Step | What | Status |
 |---|---|---|
-| 1 | spandeck integration, phase 1: connecting a station | Agents in spandeck panes use keys through the vault without holding them |
-| 2 | spandeck integration, phase 2: station token rotation | Optional rotation set per station in spandeck's Control Deck, fully automatic |
-| 3 | Mac version | The vault runs on a Mac as well as Linux |
-| 4 | Moving the vault | Put the vault on another machine without losing keys, tokens or settings |
-| 5 | Hot standby | Agents and apps keep working when the vault's machine goes down |
-| 6 | spandeck integration, phase 3: exposed-key reports | A key spandeck finds in a transcript lands on Needs attention |
+| 1 | spandeck integration, phase 1: connecting a station | Done, tested live with spandeck |
+| 2 | spandeck integration, phase 2: station token rotation | Done, tested live with spandeck |
+| 3 | spandeck integration, phase 3: exposed-key reports | Done, tested live with spandeck |
+| 4 | First release, v0.1.0 | Waiting: the repository stays private for now. Then: make it public, turn on private vulnerability reporting, tag `v0.1.0` (ARM builds need a public repository) |
+| 5 | Mac version | Next |
+| 6 | Moving the vault | Planned |
+| 7 | Hot standby | Planned |
 
-## 1, 2 and 6. spandeck integration
+Smaller improvements land as they come up; see the CHANGELOG.
+
+## 1–3. spandeck integration (done)
 
 The contract, decisions and task lists are agreed with the spandeck project and kept there. In short:
 
@@ -28,7 +31,7 @@ The contract, decisions and task lists are agreed with the spandeck project and 
   - spandeck alerts the owner when the vault's setting differs from the Control Deck's, or when someone else swapped the station's token.
 - **Phase 3:** `POST /v1/attention/report` takes a value seen in a transcript, matches it, discards it and always gives the same reply.
 
-## 3. Mac version
+## 5. Mac version
 
 Same code and repository, released alongside the Linux builds.
 
@@ -44,18 +47,18 @@ Same code and repository, released alongside the Linux builds.
 
 Open: whether the Keychain item can be read at boot before anyone logs in (decides between the System keychain and a root-only file), and which Tailscale editions to test on.
 
-## 4. Moving the vault
+## 6. Moving the vault
 
 A tested procedure, and a command for it:
 
 1. On the old machine, lock the vault and take a backup. The database is encrypted, so the copy is safe to move.
 2. On the new machine, install, restore the backup and sign in with the same passphrase. The installer writes the new Tailscale address into the config.
-3. Station and app tokens keep working, because they're tied to the callers' machines, not the vault's. spandeck rediscovers the vault. Apps and Claude's helper need the new address, or the backup address from step 5.
+3. Station and app tokens keep working, because they're tied to the callers' machines, not the vault's. spandeck rediscovers the vault. Apps and Claude's helper need the new address, or the backup address from step 7.
 4. Remove the old install with `uninstall.sh --purge`.
 
 Automatic unlock is set up again on the new machine. The credential is bound to the machine, so it can't be copied.
 
-## 5. Hot standby
+## 7. Hot standby
 
 One vault is in charge at any time. A standby on a second machine keeps things working if the primary goes down.
 

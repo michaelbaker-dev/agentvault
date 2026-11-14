@@ -912,6 +912,36 @@ pub static PROVIDERS: &[Provider] = &[
         rotate_days: Some(180),
         ..BASE
     },
+    // Before Site Manager: same format, told apart by words in the name.
+    Provider {
+        id: "unifi-console",
+        name: "UniFi console API key (local)",
+        weak: &[r"^[A-Za-z0-9_\-]{32}$"],
+        hints: &[
+            "network api",
+            "network app",
+            "protect",
+            "console",
+            "unifi local",
+            "udm",
+            "dream machine",
+            "cloud key",
+            "unifi os",
+        ],
+        summary: "Uses the UniFi Network or Protect app on one local console (a Dream Machine, Cloud Key or similar). Only that console accepts it, so the vault can't check it from here; use it from a machine on the console's network.",
+        risk: "high",
+        risk_reason: "Reads and can change that site's network settings; a Protect key can also see camera footage.",
+        docs_url: Some("https://developer.ui.com/"),
+        rotate_url: None,
+        steps: &[
+            "On the console, open the Network (or Protect) app, then Settings → Control Plane → Integrations, and create a new API key.",
+            "Paste it here.",
+            "Delete the old key on the same page.",
+        ],
+        api_auth: "header:x-api-key",
+        rotate_days: Some(365),
+        ..BASE
+    },
     Provider {
         id: "unifi",
         name: "UniFi Site Manager API key",
@@ -1399,6 +1429,17 @@ mod tests {
         assert_eq!(idl(&"Q".repeat(16), "something else"), None, "a bare 16-character code is anyone's");
         assert_eq!(idl(&"0f".repeat(16), "Twelve Data API Key"), Some("twelvedata"));
         assert_eq!(idl(&"Ab1".repeat(11)[..32], "UNIFI_API_KEY"), Some("unifi"));
+        // A local console's key has the same format; words in the name tell them apart.
+        let k = &"Ab1".repeat(11)[..32];
+        for name in [
+            "UNIFI_HOME_NETWORK_API_KEY",
+            "UNIFI_CAMP_PROTECT_API_KEY",
+            "UDM_PRO_KEY",
+            "unifi console key",
+        ] {
+            assert_eq!(idl(k, name), Some("unifi-console"), "{name}");
+        }
+        assert_eq!(idl(k, "UNIFI_SITE_MANAGER_KEY"), Some("unifi"));
         assert_eq!(idl(&"Ab_".repeat(14)[..40], "Cloud flare dns"), Some("cloudflare"));
         assert_eq!(idl("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "N8N API KEY"), Some("n8n"));
         assert_eq!(idl("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "session"), Some("jwt"));

@@ -171,6 +171,8 @@ Restart Claude Code afterwards. `setup` connects both routes:
 | **MCP** | Not directly. The token isn't in Claude Code's settings or on any command line: Claude Code asks the helper for it on each connection. A shell on this machine could still read the token file, so keep that token to list + proxy, pinned to the machine. | Claude Code, Claude Desktop, any MCP client |
 | **Skill + helper** | It could read `~/.config/agentvault/token`, so keep that token to list + proxy on one machine, where it can't reveal any key. The helper only sends the token to an https `*.ts.net` address or the one you saved. | Anything with a shell |
 
+**One token per project.** Projects on one machine can share a token, but then the vault's log can't tell them apart and revoking it stops all of them. Instead, make a token for each project and run `agentvault-cli setup --project` inside the project's folder. The helper uses that token whenever it runs in that folder (or below it), and Claude Code's MCP connection for that project uses it too; other folders keep the shared token. Name the tokens after the projects so the log reads clearly.
+
 The skill (`skill/agentvault/`) teaches Claude good habits whichever route is connected:
 - use the vault instead of asking you for keys;
 - prefer the proxy;
@@ -181,6 +183,7 @@ It also brings a helper, `skill/agentvault/scripts/agentvault-cli` (Python, stan
 
 ```sh
 agentvault-cli setup                                 # address + token, checked; connects MCP (--no-mcp to skip)
+agentvault-cli setup --project [NAME]                # a token for this folder only (see below)
 agentvault-cli check                                 # reachable, unlocked, token works?
 agentvault-cli list [word]                           # keys this token may use; no values
 agentvault-cli describe GITHUB_TOKEN                 # what it's for, risk, proxy address
