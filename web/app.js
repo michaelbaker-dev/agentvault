@@ -658,9 +658,11 @@
     });
     const d = S.status.describer;
     const banner =
-      d.claude_secret && !d.claude_ready
+      d.claude_state === "missing"
         ? h("div", { class: "note" }, "Descriptions are using built-in templates. Add your Anthropic API key as ", h("code", { text: d.claude_secret }), " and Claude will write them from each key's metadata. It never sees the values.")
-        : null;
+        : d.claude_state === "unrecognised"
+          ? h("div", { class: "note" }, "Descriptions are using built-in templates: ", d.claude_problem, ".")
+          : null;
     S.listEl = list;
     const unlockNote = autoUnlockNote();
     const attn = h("div", {});
@@ -2177,8 +2179,32 @@
           h(
             "div",
             { class: "small" },
-            h("p", {}, "Claude: ", d.claude_ready ? h("span", { class: "status good" }, h("span", { class: "dot" }), `on (${d.model}, using ${d.claude_secret})`) : h("span", { class: "status warn" }, h("span", { class: "dot" }), d.claude_secret ? `off: add a secret named ${d.claude_secret}` : "disabled in config")),
-            h("p", {}, "Provider checks: ", d.verify_with_provider ? "on" : "off"),
+            h("p", {}, "Claude: ", d.claude_ready ? h("span", { class: "status good" }, h("span", { class: "dot" }), `on (${d.model}, using ${d.claude_secret})`) : h("span", { class: "status warn" }, h("span", { class: "dot" }), `off: ${d.claude_problem}`)),
+            d.claude_ready && d.built_in_descriptions
+              ? h(
+                  "p",
+                  {},
+                  h("button", {
+                    class: "btn",
+                    text: `Describe ${d.built_in_descriptions === 1 ? "1 key" : `${d.built_in_descriptions} keys`} with Claude`,
+                    title: "Keys added while Claude was off still have built-in descriptions",
+                    onclick: async (e) => {
+                      e.target.disabled = true;
+                      try {
+                        const r = await api("POST", "/v1/describe-all", {});
+                        toast(`Claude is describing ${r.describing} key${r.describing === 1 ? "" : "s"}. They update on the Secrets page as each finishes.`);
+                        d.built_in_descriptions = 0;
+                        e.target.remove();
+                      } catch (err) {
+                        e.target.disabled = false;
+                        toast(err.message, true);
+                      }
+                    },
+                  }),
+                  h("span", { class: "muted", text: " built-in descriptions, from before Claude was on" }),
+                )
+              : null,
+            h("p", {}, "Provider checks: ", d.verify_with_provider ? "on, when a key is added or changed and again every week, so keys that stop working show under Needs attention" : "off"),
             h("p", {}, "Scheduled rotation: ", (S.status.rotation || {}).scheduled ? "on" : "off", ` · old keys revoked ${(S.status.rotation || {}).grace_hours || 24} hours after rotating`),
             h("p", { class: "muted", text: "Claude only ever receives a key's name, your notes, the detected provider and what the provider reported about the key: never the value." }),
           ),

@@ -27,7 +27,8 @@ flowchart LR
 **Keeps your keys in one place**
 - A web page for adding, editing, revealing, importing and rotating keys.
 - **Import:** paste a `.env` file or free-form notes. The vault proposes names, links parts that belong together (key ID + secret, login + password), skips duplicates and marks everything as exposed until replaced.
-- **Knows what each key is.** It recognises the provider from the key's format (48 providers), asks the provider what the key can do, and writes a plain-English description with a risk rating. With your Anthropic key in the vault, Claude writes the descriptions.
+- **Knows what each key is.** It recognises the provider from the key's format (48 providers), asks the provider what the key can do, and writes a plain-English description with a risk rating. With your Anthropic key in the vault, Claude writes the descriptions; **Describe … keys with Claude** in Settings catches up keys added before that.
+- **Checks keys every week.** Each key is checked with its provider again weekly, so one that was revoked, expired or ran out of credit shows under Needs attention without you touching it.
 - **Owner-only secrets:** passwords and wallet keys can be hidden from every token.
 
 **Lets apps and agents use keys without seeing them**
@@ -292,6 +293,7 @@ It never receives the value.
 | DELETE | `/v1/secrets/NAME` | delete |
 | GET | `/v1/secrets/NAME/value` | read |
 | POST | `/v1/secrets/NAME/describe` | write |
+| POST | `/v1/describe-all` (Claude describes every key that has a built-in description) | owner session |
 | ANY | `/v1/proxy/NAME/PATH` | proxy |
 | POST | `/mcp` | list / proxy |
 | GET | `/v1/dashboard?range=24h\|7d\|30d`, `/v1/events`, `/v1/audit/verify`, `/v1/tokens` | owner session |

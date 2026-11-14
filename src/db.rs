@@ -847,6 +847,15 @@ impl Db {
         Ok(())
     }
 
+    /// Replaces only the provider check in a key's facts (the weekly check).
+    pub fn secret_set_verification(&self, id: i64, version: i64, result: &serde_json::Value) -> DbResult<()> {
+        self.c().execute(
+            "UPDATE secrets SET facts = json_set(facts, '$.verification', json(?3)) WHERE id = ?1 AND version = ?2",
+            params![id, version, result.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn secret_touch(&self, id: i64) -> DbResult<()> {
         self.c().execute(
             "UPDATE secrets SET use_count = use_count + 1, last_used_at = ?2 WHERE id = ?1",

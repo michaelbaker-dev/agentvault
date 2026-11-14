@@ -88,6 +88,14 @@ pub async fn run(app: AppRef, id: i64, version: i64, verify: bool, redetect: boo
             }
         }
     }
+    // Describing again without asking the provider (same value): keep what it
+    // said last time, rather than dropping it.
+    if !verify
+        && !redetect
+        && let Some(v) = meta.facts.get("verification")
+    {
+        facts.insert("verification".into(), v.clone());
+    }
     if expires_at.is_some() {
         let _ = app.db.secret_set_expiry(id, version, expires_at);
     }
@@ -129,6 +137,55 @@ pub async fn run(app: AppRef, id: i64, version: i64, verify: bool, redetect: boo
     };
     if let Err(e) = app.db.secret_set_description(id, version, &desc) {
         tracing::error!("saving description for {}: {e}", meta.name);
+    }
+}
+
+/// Asks the provider again whether a stored key still works, without asking
+/// Claude: the weekly check. Only the verification result changes, so a key
+/// that was revoked or expired shows up under Needs attention. When the answer
+/// changed (a key stopped working, or works again), the key is described afresh.
+pub async fn recheck(app: &AppRef, id: i64) {
+    let Ok(permit) = app.describe_gate.acquire().await else { return };
+    let Ok(Some(meta)) = app.db.secret_by_id(id) else { return };
+    let Some(p) = meta.provider.as_deref().and_then(providers::by_id) else {
+        return;
+    };
+    let Some(v) = &p.verify else { return };
+    let before = meta.facts.pointer("/verification/status").and_then(Value::as_str).map(String::from);
+    let result = match verify_url(p, v, &meta).map(|u| app.endpoints.rewrite(u)) {
+        None => json!({ "status": "needs_base_url", "checked_at": now_ms() }),
+        Some(url) => {
+            let Ok(material) = app.reveal_version(&meta, meta.version) else {
+                return;
+            };
+            let creds = Creds {
+                material: &material,
+                fields: &meta.fields,
+            };
+            let out = verify_with_provider(&app.http, v, url, &creds).await;
+            app.record_internal(
+                EventInfo::new("verify", ACTOR)
+                    .secret(&meta.name)
+                    .upstream(out.elapsed)
+                    .detail(format!("{} (weekly check)", p.id)),
+                out.status,
+                out.elapsed,
+            );
+            if out.expires_at.is_some() {
+                let _ = app.db.secret_set_expiry(id, meta.version, out.expires_at);
+            }
+            out.result
+        }
+    };
+    let after = result.get("status").and_then(Value::as_str).map(String::from);
+    if let Err(e) = app.db.secret_set_verification(id, meta.version, &result) {
+        tracing::warn!("saving the check of {}: {e}", meta.name);
+        return;
+    }
+    drop(permit);
+    if before.is_some() && before != after {
+        let _ = app.db.secret_set_describe_status(id, "pending");
+        run(app.clone(), id, meta.version, false, false).await;
     }
 }
 
@@ -431,11 +488,13 @@ async fn claude_describe(app: &AppRef, input: &Value) -> Result<ClaudeOut, Strin
         .secret_get(key_name)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("add an Anthropic key named {key_name} to enable Claude descriptions"))?;
+    let key = app.reveal(&meta).map_err(|e| e.msg)?;
     // Only ever send a value that is recognisably an Anthropic key to Anthropic.
-    if meta.provider.as_deref() != Some("anthropic") {
+    // Checked on the value itself, so a key pasted again works at once (its
+    // stored provider is only updated once it has been described).
+    if providers::detect(&key.value, "").map(|p| p.id) != Some("anthropic") {
         return Err(format!("{key_name} isn't recognised as an Anthropic API key"));
     }
-    let key = app.reveal(&meta).map_err(|e| e.msg)?;
 
     let schema = json!({
         "type": "object",
@@ -456,10 +515,13 @@ async fn claude_describe(app: &AppRef, input: &Value) -> Result<ClaudeOut, Strin
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": input.to_string()}],
     });
+    let url = app
+        .endpoints
+        .rewrite(url::Url::parse("https://api.anthropic.com/v1/messages").expect("fixed URL"));
     let start = Instant::now();
     let resp = app
         .http
-        .post("https://api.anthropic.com/v1/messages")
+        .post(url)
         .timeout(CLAUDE_TIMEOUT)
         .header("x-api-key", key.value.as_str())
         .header("anthropic-version", "2023-06-01")

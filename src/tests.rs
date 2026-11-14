@@ -1279,6 +1279,15 @@ mod fake {
             }
             // Anthropic
             ("GET", ["an", "models"]) => ok(json!({ "data": [] })),
+            ("POST", ["an", "messages"]) => ok(json!({
+                "stop_reason": "end_turn",
+                "content": [{ "type": "text", "text": json!({
+                    "description": "Described by the fake Claude.",
+                    "provider": "Fake",
+                    "risk": "low",
+                    "risk_reason": "A test key."
+                }).to_string() }]
+            })),
             ("GET", ["an", "organizations", "api_keys"]) => ok(json!({
                 "data": [
                     { "id": "apikey_old", "partial_key_hint": "sk-ant-api03-OLD...oldA" },
@@ -3233,4 +3242,141 @@ async fn only_revoked_tokens_can_be_removed_from_the_list() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=50", &s.hdrs(), None).await;
     assert!(ev.body.to_string().contains("token.remove"));
+}
+
+// ---- descriptions for older keys, and the weekly provider check ----
+
+async fn describer(app: &AppRef, s: &Session) -> Value {
+    call(app, LAPTOP, "GET", "/v1/status", &s.hdrs(), None).await.body["describer"].clone()
+}
+
+async fn wait_described(app: &AppRef, s: &Session, name: &str) -> Value {
+    for _ in 0..100 {
+        let r = call(app, LAPTOP, "GET", &format!("/v1/secrets/{name}"), &s.hdrs(), None).await;
+        if r.body["describe_status"] != "pending" {
+            return r.body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("{name} stayed pending");
+}
+
+#[tokio::test]
+async fn settings_say_why_claude_is_off_and_describe_all_catches_up_older_keys() {
+    let (ep, f) = fake::start().await;
+    let base = test_app_with(ep);
+    let mut cfg = base.cfg.clone();
+    cfg.describe.claude_secret = Some("ANTHROPIC_API_KEY".into());
+    let app = Arc::new(App {
+        cfg,
+        endpoints: base.endpoints.clone(),
+        ..clone_app(&base)
+    });
+    let s = setup(&app).await;
+    assert_eq!(describer(&app, &s).await["claude_state"], "missing");
+
+    // A key cut short when pasted isn't recognised, so it's never sent to
+    // Anthropic, and Settings says so instead of "on".
+    add(&app, &s, "ANTHROPIC_API_KEY", &fake("sk-ant-api03", 'k', 94)).await;
+    add(&app, &s, "OLD_KEY", &fake("sk-proj-", 'q', 40)).await;
+    let old = wait_described(&app, &s, "OLD_KEY").await;
+    assert!(old["describe_status"].as_str().unwrap().starts_with("template"), "{old}");
+    let d = describer(&app, &s).await;
+    assert_eq!(d["claude_state"], "unrecognised");
+    assert_eq!(d["claude_ready"], false);
+    assert!(d["claude_problem"].as_str().unwrap().contains("108 characters"), "{d}");
+    let r = call(&app, LAPTOP, "POST", "/v1/describe-all", &s.hdrs(), Some(json!({}))).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{:?}", r.body);
+    assert!(
+        !f.lock().unwrap().calls.iter().any(|c| c.contains("messages")),
+        "nothing sent to Claude"
+    );
+
+    // Pasted whole, it works, and the older keys can catch up.
+    let r = call(
+        &app,
+        LAPTOP,
+        "PATCH",
+        "/v1/secrets/ANTHROPIC_API_KEY",
+        &s.hdrs(),
+        Some(json!({ "value": fake("sk-ant-api03-", 'k', 95), "verify": false })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    wait_described(&app, &s, "ANTHROPIC_API_KEY").await;
+    let d = describer(&app, &s).await;
+    assert_eq!(d["claude_state"], "ready");
+    assert_eq!(d["built_in_descriptions"], 1, "{d}");
+    let r = call(&app, TAGGED, "POST", "/v1/describe-all", &[], Some(json!({}))).await;
+    assert_ne!(r.status, StatusCode::ACCEPTED, "owner only");
+    let r = call(&app, LAPTOP, "POST", "/v1/describe-all", &s.hdrs(), Some(json!({}))).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.body);
+    assert_eq!(r.body["describing"], 1);
+    let old = wait_described(&app, &s, "OLD_KEY").await;
+    assert_eq!(old["describe_status"], "described by Claude", "{old}");
+    assert_eq!(old["description"], "Described by the fake Claude.");
+    assert_eq!(describer(&app, &s).await["built_in_descriptions"], 0);
+}
+
+#[tokio::test]
+async fn the_weekly_check_finds_keys_that_stopped_working() {
+    let (ep, f) = fake::start().await;
+    let base = test_app_with(ep);
+    let mut cfg = base.cfg.clone();
+    cfg.describe.verify_with_provider = true;
+    let app = Arc::new(App {
+        cfg,
+        endpoints: base.endpoints.clone(),
+        ..clone_app(&base)
+    });
+    let s = setup(&app).await;
+    let key = format!("cfut_{}", "G".repeat(44));
+    f.lock().unwrap().cf_valid = vec![key.clone()];
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/secrets",
+        &s.hdrs(),
+        Some(json!({ "name": "CF", "value": key, "verify": true })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let m = wait_described(&app, &s, "CF").await;
+    assert_eq!(m["facts"]["verification"]["status"], "valid", "{m}");
+    let verifies = |f: &fake::FakeRef| f.lock().unwrap().calls.iter().filter(|c| c.contains("tokens/verify")).count();
+    let before = verifies(&f);
+
+    // Checked just now: the scheduler leaves it alone.
+    crate::rotate::tick(&app).await;
+    assert_eq!(verifies(&f), before);
+
+    // Revoked at Cloudflare, and a week goes by.
+    f.lock().unwrap().cf_valid.clear();
+    app.db
+        .raw()
+        .execute(
+            "UPDATE secrets SET facts = json_set(facts, '$.verification.checked_at', 0) WHERE name = 'CF'",
+            [],
+        )
+        .unwrap();
+    crate::rotate::tick(&app).await;
+    assert!(verifies(&f) > before, "checked again");
+    let m = wait_described(&app, &s, "CF").await;
+    assert_eq!(m["facts"]["verification"]["status"], "rejected", "{m}");
+    assert!(m["facts"]["verification"]["checked_at"].as_i64().unwrap() > 0);
+    assert!(!m.to_string().contains(&key));
+    let a = call(&app, LAPTOP, "GET", "/v1/attention", &s.hdrs(), None).await;
+    assert!(
+        a.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["secret"] == "CF" && i["kind"] == "rejected"),
+        "{:?}",
+        a.body
+    );
+    // Checked once, not counted twice: the fresh description reused the result.
+    assert_eq!(verifies(&f), before + 1);
+    assert!(m["description"].as_str().unwrap().contains("rejected"), "{m}");
 }

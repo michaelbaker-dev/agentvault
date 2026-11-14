@@ -47,6 +47,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/v1/secrets/{name}", get(get_secret).patch(update_secret).delete(delete_secret))
         .route("/v1/secrets/{name}/value", get(read_value))
         .route("/v1/secrets/{name}/describe", post(redescribe))
+        .route("/v1/describe-all", post(describe_all))
         .route("/v1/proxy/{name}/{*path}", any(proxy_request))
         .route("/v1/secrets/{name}/rotate", post(rotate_secret))
         .route("/v1/rotations", get(list_rotations))
@@ -329,10 +330,8 @@ async fn status(State(app): State<AppRef>, Extension(caller): Extension<Caller>)
         }))
         .into_response());
     }
-    let claude_ready = match &app.cfg.describe.claude_secret {
-        Some(n) => app.db.secret_get(n)?.is_some(),
-        None => false,
-    };
+    let (claude_state, claude_problem) = claude_state(&app)?;
+    let built_in = app.db.secret_list()?.iter().filter(|m| needs_claude(m)).count();
     Ok(Json(json!({
         "service": "agentvault",
         "initialized": Vault::is_initialized(&app.db)?,
@@ -343,7 +342,10 @@ async fn status(State(app): State<AppRef>, Extension(caller): Extension<Caller>)
         "origin": app.origin,
         "describer": {
             "claude_secret": app.cfg.describe.claude_secret,
-            "claude_ready": claude_ready,
+            "claude_ready": claude_state == "ready",
+            "claude_state": claude_state,
+            "claude_problem": claude_problem,
+            "built_in_descriptions": built_in,
             "model": app.cfg.describe.model,
             "verify_with_provider": app.cfg.describe.verify_with_provider,
         },
@@ -1158,6 +1160,55 @@ async fn redescribe(
     app.db.secret_set_describe_status(meta.id, "pending")?;
     tokio::spawn(describe::run(app.clone(), meta.id, meta.version, true, false));
     Ok(with_event((StatusCode::ACCEPTED, Json(json!({ "describing": name }))), ev))
+}
+
+/// Whether Claude can write descriptions: "ready", "missing" (no key under
+/// the configured name), "unrecognised" (a key that isn't an Anthropic API
+/// key, which the describer refuses to send to Anthropic) or "disabled".
+fn claude_state(app: &AppRef) -> ApiResult<(&'static str, Option<String>)> {
+    let Some(n) = &app.cfg.describe.claude_secret else {
+        return Ok(("disabled", Some("disabled in config".into())));
+    };
+    Ok(match app.db.secret_get(n)? {
+        None => ("missing", Some(format!("add your Anthropic API key as a secret named {n}"))),
+        Some(m) if m.provider.as_deref() != Some("anthropic") => (
+            "unrecognised",
+            Some(format!(
+                "{n} isn't recognised as an Anthropic API key. They start with sk-ant-api03- and are 108 characters long, \
+                 so check it was pasted whole"
+            )),
+        ),
+        Some(_) => ("ready", None),
+    })
+}
+
+/// A key whose description came from the built-in templates (Claude was off,
+/// unreachable or refused) or failed.
+fn needs_claude(m: &SecretMeta) -> bool {
+    m.describe_status.starts_with("template") || m.describe_status.starts_with("error")
+}
+
+/// Has Claude describe every key that only has a built-in description.
+async fn describe_all(State(app): State<AppRef>, Extension(caller): Extension<Caller>, headers: HeaderMap) -> ApiResult {
+    owner(&app, &headers, &caller)?;
+    app.vault.ensure_unsealed()?;
+    if let (state, Some(why)) = claude_state(&app)?
+        && state != "ready"
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("Claude can't write descriptions yet: {why}"),
+        ));
+    }
+    let todo: Vec<SecretMeta> = app.db.secret_list()?.into_iter().filter(needs_claude).collect();
+    for m in &todo {
+        app.db.secret_set_describe_status(m.id, "pending")?;
+        tokio::spawn(describe::run(app.clone(), m.id, m.version, true, false));
+    }
+    Ok(with_event(
+        (StatusCode::ACCEPTED, Json(json!({ "describing": todo.len() }))),
+        EventInfo::new("secret.describe_all", "owner (web)").detail(format!("{} key(s)", todo.len())),
+    ))
 }
 
 // ---------------------------------------------------------------- rotation

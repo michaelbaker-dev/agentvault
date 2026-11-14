@@ -1520,6 +1520,9 @@ pub async fn tick(app: &AppRef) {
     for r in app.db.rotations_due(now_ms()).unwrap_or_default() {
         finish(app, &r).await;
     }
+    if app.cfg.describe.verify_with_provider {
+        weekly_checks(app).await;
+    }
     if !app.cfg.rotation.scheduled {
         return;
     }
@@ -1549,6 +1552,32 @@ pub async fn tick(app: &AppRef) {
         if let Err(e) = rotate_auto(app, &meta, ACTOR_SCHEDULER).await {
             tracing::warn!("scheduled rotation of {} failed: {}", meta.name, e.msg);
         }
+    }
+}
+
+/// How often each key is checked with its provider again.
+const RECHECK_MS: i64 = 7 * DAY_MS;
+/// Checks per scheduler tick (one a minute), so they spread out.
+const RECHECKS_PER_TICK: usize = 3;
+
+/// Keys whose last provider check is over a week old, oldest first.
+pub fn recheck_due(all: &[SecretMeta], now: i64) -> Vec<i64> {
+    let mut due: Vec<(i64, i64)> = all
+        .iter()
+        .filter(|m| m.describe_status != "pending" && provider_of(m).is_some_and(|p| p.verify.is_some()))
+        .filter_map(|m| {
+            let at = m.facts.pointer("/verification/checked_at").and_then(Value::as_i64).unwrap_or(0);
+            (now - at > RECHECK_MS).then_some((at, m.id))
+        })
+        .collect();
+    due.sort();
+    due.into_iter().map(|(_, id)| id).collect()
+}
+
+async fn weekly_checks(app: &AppRef) {
+    let all = app.db.secret_list().unwrap_or_default();
+    for id in recheck_due(&all, now_ms()).into_iter().take(RECHECKS_PER_TICK) {
+        describe::recheck(app, id).await;
     }
 }
 
