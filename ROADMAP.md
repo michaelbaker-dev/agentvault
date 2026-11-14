@@ -46,6 +46,27 @@ Same code and repository. Built and tested on an Apple silicon Mac (macOS 26) wi
 | Process hardening | `prctl` (no dumps), systemd sandbox | `PT_DENY_ATTACH`, no core dumps | Done |
 | Install | `install.sh`, `uninstall.sh` | `deploy/macos/install.sh`, `uninstall.sh` | Done; shellcheck in CI |
 | Downloads | x86_64 and ARM64 Linux | Apple silicon, built by GitHub's macOS runners (free for public repositories) with signed build provenance | Done in 0.1.1 |
+| Developer ID signing | — | Signed with the owner's Developer ID, hardened runtime, notarized by Apple | On hold: workflow ready, keys not yet issued (below) |
+
+### Developer ID signing (on hold)
+
+Today the Mac download is ad-hoc signed: it runs when downloaded with `curl`, a browser download needs its quarantine flag cleared, and after each upgrade the owner signs in once so automatic unlock is stored again. Signing with a Developer ID fixes both: macOS opens it from a browser, and the Keychain trusts every build signed by the same team, so automatic unlock survives upgrades.
+
+Decided: GitHub's macOS runner signs and notarizes every release automatically, from secrets in a protected `release` environment that only `main` and `v*` tags can use. Nobody has to do anything per release. Signing on the build Mac instead was considered, but release assets would then need uploading from there, and its signing key would be usable by anything with access to that account.
+
+Done:
+- the release workflow signs (hardened runtime, identifier `com.agentvault`) and notarizes when the secrets exist, and warns and stays ad-hoc when they don't;
+- the Mac installer keeps the stored passphrase on upgrades between builds with the same Developer ID signature;
+- [docs/releasing.md](docs/releasing.md) has the full setup;
+- a private key and certificate request (`DeveloperID.certSigningRequest`) are waiting on the build Mac, in a folder only its owner's account can read.
+
+To pick it up:
+1. The owner, logged in to Apple, on the build Mac: upload the certificate request at developer.apple.com (Certificates → Developer ID Application, G2) and download `developerID_application.cer`; generate an App Store Connect API key with the Developer role and download its `.p8`; pass on the Key ID and Issuer ID (identifiers, not secrets).
+2. Claude: build the `.p12` from the key and certificate; create the `release` environment limited to `main` and `v*`; encrypt and upload the five secrets; optionally back them up in the vault as owner-only secrets.
+3. Run the release workflow by hand: check the signature (`anchor apple generic and identifier "com.agentvault"`) and Apple's `Accepted`. On the build Mac, upgrade between two signed builds and check automatic unlock survives without a sign-in.
+4. Release v0.1.2; drop the quarantine note from the README.
+
+The signature shows the owner's developer account name on the Mac download.
 
 Still open:
 - test the App Store app and the open-source `tailscaled`;
