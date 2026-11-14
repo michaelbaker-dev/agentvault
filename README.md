@@ -66,7 +66,7 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
 
 | | What | Where it stands |
 |---|---|---|
-| 1 | **First release, v0.1.0**, with downloads for Linux | Ready. Waits until the repository is public. |
+| 1 | **First release, v0.1.0**, with downloads for Linux | Next: everything is ready to tag. |
 | 2 | **Finish the Mac version:** Mac downloads, and testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself; these are what's left. |
 | 3 | **Moving the vault** to another machine: a tested procedure and a command, with tokens kept working | Planned |
 | 4 | **A standby vault at a second site.** The standby stays in sync and takes over by itself if the main site loses power or internet. | Designed |

@@ -7,7 +7,7 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | 1 | spandeck integration, phase 1: connecting a station | Done, tested live with spandeck |
 | 2 | spandeck integration, phase 2: station token rotation | Done, tested live with spandeck |
 | 3 | spandeck integration, phase 3: exposed-key reports | Done, tested live with spandeck |
-| 4 | First release, v0.1.0 | Waiting: the repository stays private for now. Then: make it public, turn on private vulnerability reporting, tag `v0.1.0` (ARM builds need a public repository) |
+| 4 | First release, v0.1.0 | Next: the repository is public, with private vulnerability reporting and secret scanning on. Tagging `v0.1.0` builds the Linux downloads (x86_64 and ARM64) |
 | 5 | Mac version | Mostly done: runs, installs and unlocks itself on Apple silicon; Mac downloads and other Tailscale editions left |
 | 6 | Moving the vault | Planned |
 | 7 | Standby vault at a second site, with automatic takeover | Designed, to come back to |
