@@ -1,54 +1,99 @@
 # AgentVault
 
-A secrets vault for your Tailscale network, in one Rust binary. Store your API keys once, then let your apps and AI agents use them over HTTPS, without copying `.env` files around and, through the proxy, without ever handing over the key.
+**A secrets vault for your Tailscale network.** Store your API keys once, on a machine you own. Your apps and AI agents use them over HTTPS, without `.env` files scattered around and, through the proxy, without ever holding a key.
 
-> **Status: early (v0.1).** It works and is well tested, but it has not had an independent security audit, and the automatic rotators have so far only been tested against simulated providers (see [Limitations](#limitations)). Report security problems privately: see [SECURITY.md](SECURITY.md).
+> **Status: early (v0.1, not yet released).** It works, is well tested and is in daily use. It has not had an independent security audit, and the automatic rotators have so far been tested only against simulated providers (see [Limitations](#limitations)). Report security problems privately: see [SECURITY.md](SECURITY.md).
 
 ![The Secrets page: keys with their provider, risk and status, and a "Needs attention" list](docs/screenshots/secrets.png)
 
+**Contents:** [How it works](#how-it-works) · [What it does](#what-it-does) · [What's planned](#whats-planned) · [Quick start](#quick-start) · [Install](#install) · [Use it](#use-it) · [Rotation](#rotation) · [Running it](#running-it) · [Security model](#security-model) · [Limitations](#limitations)
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Apps, scripts, AI agents<br/>each with its own token"] -- "HTTPS, only over your tailnet" --> V["AgentVault<br/>one program on your machine<br/>keys encrypted at rest"]
+    V -- "the request, with the key attached" --> P["Provider APIs<br/>OpenAI, GitHub, Cloudflare, ..."]
+    O["You, in a browser<br/>with your passphrase"] -- "add, rotate, approve, revoke" --> V
+```
+
+1. **The vault lives on one of your machines** and listens only on its Tailscale address, so nothing outside your tailnet can reach it. Tailscale tells it which device and person each request comes from.
+2. **You manage keys in its web page.** Only your own devices can sign in, and only with your passphrase. The passphrase is the only way to decrypt the keys.
+3. **Each app or agent gets its own token**, limited to the keys it needs and the machine it runs on.
+4. **Apps call providers through the vault.** A request to `/v1/proxy/OPENAI_API_KEY/v1/models` goes to OpenAI with the key attached on the vault's side, and the key is scrubbed from the reply. An agent can use a key all day and never see it.
+
 ## What it does
 
-- **Web interface** for adding, editing, revealing, importing and rotating keys.
-- **Proxy:** `/v1/proxy/NAME/...` calls the provider with the key attached on the server, so the caller never sees the key.
-- **For AI agents:** an MCP endpoint and a Claude skill. Claude can find and use your keys, with no way to read them.
-- **REST API** with everything the web interface does.
-- **Knows your keys.** When you add a key, the vault:
-  - recognises the provider from the key's format (48 providers);
-  - asks the provider what the key can do;
-  - writes a plain-English description and risk rating.
-- **Import:** paste a `.env` file or free-form notes. The vault:
-  - proposes names;
-  - links parts that belong together (key ID + secret, login + password);
-  - skips duplicates;
-  - flags everything as exposed until replaced.
-- **Rotation:**
-  - for OpenRouter, Cloudflare, Tailscale, Azure and Google, the vault makes the new key itself;
-  - for everything else, a guided flow with a link to the right page;
-  - old keys are revoked after a grace period, and any rotation can be undone until then.
-- **Scoped tokens:** each app or agent gets its own token. It can be limited to:
+**Keeps your keys in one place**
+- A web page for adding, editing, revealing, importing and rotating keys.
+- **Import:** paste a `.env` file or free-form notes. The vault proposes names, links parts that belong together (key ID + secret, login + password), skips duplicates and marks everything as exposed until replaced.
+- **Knows what each key is.** It recognises the provider from the key's format (48 providers), asks the provider what the key can do, and writes a plain-English description with a risk rating. With your Anthropic key in the vault, Claude writes the descriptions.
+- **Owner-only secrets:** passwords and wallet keys can be hidden from every token.
+
+**Lets apps and agents use keys without seeing them**
+- **Proxy:** the key is attached on the server and scrubbed from replies.
+- **For AI agents:** an MCP endpoint and a Claude skill, so Claude finds and uses your keys with no way to read them. A small helper, `agentvault-cli`, does the same from any shell, and can push to GitHub through the vault with no git credentials on the machine.
+- **spandeck stations:** a spandeck terminal asks for a token for each of its machines, and you approve it on the vault's own page.
+- **REST API** with everything the web page does.
+
+**Controls who uses what**
+- **Scoped tokens**, each limited to:
   - which keys it can use;
   - which machines it works from;
-  - read-only requests through the proxy.
-- **Owner-only secrets:** passwords and wallet keys can be hidden from every token.
-- **Needs attention:** exposed, expired, rejected, overdue or incomplete keys, most urgent first. Each key's card shows its own warnings too, with **OK** to accept them until something about the key changes, and **Restore** to bring them back.
+  - optionally, read-only (GET) requests through the proxy.
+- **One token per project**, so the log shows who did what and each project can be cut off alone.
+- **Revoke instantly**, and remove revoked tokens from the list.
+
+**Keeps keys fresh**
+- **Rotation:** automatic for OpenRouter, Cloudflare, Tailscale, Azure and Google; a guided flow with the right link for everything else. Old keys are revoked after a grace period, and every rotation can be undone until then.
+- **Needs attention:** keys that are exposed, expired, rejected, overdue or incomplete, most urgent first. Each key's card shows its own warnings too, with **OK** to accept them and **Restore** to bring them back.
+- **Exposure reports:** spandeck reports keys it spots in prompts and transcripts, and matches land on your list.
+
+**Shows what happened**
 - **Dashboard:** usage per key and per machine, with latency.
 - **Tamper-evident audit log.**
+
+**Runs on** Linux (x86_64 and ARM64) and macOS (Apple silicon). It's one Rust program with its database in a single file, and it can unlock itself after a restart (a systemd credential on Linux, your login Keychain on a Mac).
 
 | | |
 |---|---|
 | ![Rotation page](docs/screenshots/rotation.png) | ![Dashboard](docs/screenshots/dashboard.png) |
 | ![Import preview](docs/screenshots/import.png) | ![Tokens page](docs/screenshots/tokens.png) |
 
+## What's planned
+
+In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.md).
+
+| | What | Where it stands |
+|---|---|---|
+| 1 | **First release, v0.1.0**, with downloads for Linux | Ready. Waits until the repository is public. |
+| 2 | **Finish the Mac version:** Mac downloads, and testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself; these are what's left. |
+| 3 | **Moving the vault** to another machine: a tested procedure and a command, with tokens kept working | Planned |
+| 4 | **A standby vault at a second site.** The standby stays in sync and takes over by itself if the main site loses power or internet. | Designed |
+| 5 | **Machine accounts and an SSH agent:** admin passwords kept owner-only, and the vault signing SSH logins so private keys never leave it | An idea, to come back to |
+
+**The standby, in short.** The vault is only reachable while its machine is. The plan is a vault at each site and a small "witness" in a third place:
+- The standby copies every change within about a second. The data stays encrypted.
+- Exactly one vault is in charge. Taking over needs two of the three votes, so a broken link between the sites can never leave two vaults in charge.
+- A site that's cut off keeps working on its own network in a safe, limited mode: listing keys, calling providers, approving and revoking tokens. It merges what it did when the connection is back.
+- Rotations and other risky changes happen only on the vault in charge.
+
 ## Quick start
 
 1. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), turn on **MagicDNS** and **HTTPS Certificates**.
-2. On the Linux machine that will hold the vault, download and install it. Use `aarch64` instead of `x86_64` on ARM:
+2. On the Linux machine that will hold the vault, install it. Until the first release is out, build it from source (needs [Rust](https://rustup.rs) 1.89+):
+   ```sh
+   git clone https://github.com/michaelbaker-dev/agentvault && cd agentvault
+   cargo build --release && sudo deploy/install.sh
+   ```
+   From a release, once there is one (use `aarch64` instead of `x86_64` on ARM):
    ```sh
    curl -LO https://github.com/michaelbaker-dev/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
    gh attestation verify agentvault-x86_64-linux.tar.gz --repo michaelbaker-dev/agentvault   # optional: proves it was built here
    tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
+   On a Mac, see [On a Mac](#on-a-mac).
 3. Open the address it prints (`https://<machine>.<tailnet>.ts.net`) on one of your devices and choose a passphrase. Then answer **Y** in the terminal to have the vault unlock itself after a reboot.
 4. Add your keys: **Add secret**, or **Import** to paste a whole file.
 5. Make a token on the **Tokens** page for each app or agent, and use it as shown in [Use it](#use-it).
@@ -65,7 +110,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 
 ## Install
 
-**From a release** (no Rust needed): see the [Quick start](#quick-start).
+**From a release** (no Rust needed, once v0.1.0 is out): see the [Quick start](#quick-start).
 
 **From source:**
 
@@ -337,6 +382,7 @@ Not covered:
 
 ## Limitations
 
+- **One machine.** While the vault's machine is down, apps can't get their keys. A [standby at a second site](#whats-planned) is planned.
 - **One owner per vault.** Only one Tailscale login can sign in to the web interface. Other people and programs use tokens.
 - **The vault machine runs Linux with systemd, or macOS.** On macOS only the standalone Tailscale app has been tested so far, and there are no Mac downloads yet: build from source. Your other devices can be anything on the tailnet.
 - **Tailscale only.** It relies on tailscaled for device identity and certificates. Headscale and other control servers are untested.
@@ -346,7 +392,7 @@ Not covered:
 ## Development
 
 ```sh
-cargo test                                  # 87 tests: crypto, auth, tokens, CSRF, sealing, MCP, audit chain, import, every rotator against a fake provider
+cargo test                                  # 94 tests: crypto, auth, tokens, CSRF, sealing, MCP, audit chain, import, every rotator against a fake provider
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo deny check                            # advisories, licenses, sources
 gitleaks dir .                              # no secrets in the tree

@@ -10,7 +10,7 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | 4 | First release, v0.1.0 | Waiting: the repository stays private for now. Then: make it public, turn on private vulnerability reporting, tag `v0.1.0` (ARM builds need a public repository) |
 | 5 | Mac version | Mostly done: runs, installs and unlocks itself on Apple silicon; Mac downloads and other Tailscale editions left |
 | 6 | Moving the vault | Planned |
-| 7 | Hot standby | Planned |
+| 7 | Standby vault at a second site, with automatic takeover | Designed, to come back to |
 | 8 | Machine accounts and an SSH agent | Idea, to come back to |
 
 Smaller improvements land as they come up; see the CHANGELOG.
@@ -63,25 +63,61 @@ A tested procedure, and a command for it:
 
 Automatic unlock is set up again on the new machine. The credential is bound to the machine, so it can't be copied.
 
-## 7. Hot standby
+## 7. Standby vault at a second site, with automatic takeover
 
-One vault is in charge at any time. A standby on a second machine keeps things working if the primary goes down.
+Designed, not started. One vault runs at each site (each on its own internet connection), so an outage at one site doesn't take the vault away. Exactly one vault is in charge at any time; the other is a standby.
+
+### Decisions
+
+- **Placement:** the primary at the main site, the standby at the second site, and a small **witness** in a third place (a cloud machine), so that losing one site never takes two of the three votes with it.
+- **Two machines can't elect a leader safely on their own.** When the standby stops hearing from the primary, it can't tell "the primary is down" from "the link between us is down"; if it took over in the second case, both would act. A third vote settles it, as in MongoDB's arbiter, repmgr's witness, Patroni with etcd, or LiteFS and Litestream with a lease.
+- **The witness holds nothing secret:** no keys and no data, only who is in charge, the current election number and the latest change number. The worst a compromised witness can do is vote for both sides; the master-only rules below still keep dangerous changes from happening twice.
+- **No automatic switch back.** After an outage the new primary stays in charge until the owner switches back on its page (or an optional rule like "after an hour of stable internet"), so a flaky connection can't make the sites trade places.
+- **Fail safe, never split.** When no side has two votes, both run in island mode and wait. The owner is the backup vote: the standby's page offers "Take over" with the passphrase once the owner confirms the other site is really gone.
+- **Ruled out:** Tailscale Services (one address for several machines: hosts must be tagged, and callers arrive through Tailscale's proxy so the vault can't tell which device is calling); LiteFS (Linux only, needs Consul); full Raft such as openraft or rqlite (puts a full copy of the vault on the witness and is much more code; worth it only with three or more data machines).
+
+### Design
 
 | Piece | Design |
 |---|---|
-| Copying data | The standby keeps a continuously updated copy of the encrypted database, pulled from the primary over the tailnet. Useless without the passphrase. |
-| Primary down | The standby switches to **reduced mode** on its own: listing keys and calls through the proxy keep working; nothing changes (no rotations, no new tokens, no edits). Two vaults can never both act. |
-| Becoming primary | The owner promotes the standby on its own page, with the passphrase, once the old primary is known to be gone. Then it does everything. The old primary must not come back as primary: on start it sees it was replaced and becomes the standby. |
-| Finding it | spandeck uses whichever vault answers. Apps and Claude's helper get an optional backup address and try it when the primary doesn't answer. |
-| Rotation safety | Rotations happen only on the primary. The 24-hour grace period covers a standby that is a little behind. |
-| Trade-off | The standby must unlock itself, so its machine also holds the stored passphrase: a second machine where root access means vault access. |
+| Staying in sync | The standby asks the primary for new changes about once a second; that request is also the heartbeat. Keys, versions and tokens go across as numbered changes, still encrypted. The usage log only grows and each entry records which machine wrote it, so both sides' logs merge. |
+| Who the vaults talk to | Each vault checks that the caller is the other vault's machine (Tailscale) and that it unlocked the same vault (a proof derived from the vault key). The link has its own encryption on top of HTTPS. |
+| No lost changes | While the standby is up, a change counts as saved only once the standby has it. Changes are rare and made by the owner, so the extra delay doesn't matter. |
+| Who's in charge | The primary holds a 10-second lease, renewed every 2 seconds with two of the three votes. If it can't renew, it switches itself to island mode before the standby may take over. The standby asks for votes only after the lease has run out, and the witness votes only for a vault that has every confirmed change (Raft's rule). Leases are measured as durations, not clock times. Taking over takes about 15 seconds. |
+| Fencing | Every change and sync message carries the election number. Anything from an older number is refused, so a returning old primary sees it was replaced and becomes the standby. |
+| Island mode (the side without the votes) | Keeps working on its own network: listing keys, calls through the proxy, revoking tokens, approving new station and app tokens, OKs on warnings, adding a new key. Waits for the master: changing a key's value, deleting a key, rotations, passphrase and settings. |
+| Merging after an outage | The returning side sends what it recorded in island mode: usage (keep all), last-used times (take the latest), revocations (a revoke always wins), new tokens (unique, no clash), new keys (a clashing name is renamed and flagged). Then it pulls what it missed. Anything that needs a decision shows on the web page with buttons. |
+| Rotation safety | Rotations run only on a primary with plenty of lease left. The 24-hour grace period covers a standby that is a little behind. |
+| Finding a vault | Claude's helper, the MCP server and spandeck get both addresses, prefer the one at their own site and fall back to the other. Either vault answers; a standby passes changes on to the primary. |
+| Unlocking the standby | The second site is the likelier place for a machine to be stolen, so the standby doesn't keep the whole passphrase. After a restart it asks the primary for the other half of its unlock key (like Clevis/Tang for disks). A stolen machine removed from the tailnet can never unlock. Cost: if it restarts while the primary is down, it stays locked until the primary is back or the owner signs in. The primary keeps its own automatic unlock. |
 
-Fully automatic promotion is deliberately left out: if the network splits, both machines would think they are in charge and could revoke each other's new keys. Revisit only with a proper way to decide which side wins.
+### Failures
 
-Open:
-- the replication mechanism (vault-to-vault pull over the tailnet, or shipping the database's write-ahead log);
-- how long the primary must be gone before reduced mode starts;
-- how the usage log written on a standby is merged back.
+| What fails | Result |
+|---|---|
+| Main site's internet | The standby takes over with the witness's vote. The main site's vault drops to island mode for machines on its own network. |
+| Second site's internet | The primary stays in charge; the standby runs in island mode. |
+| Only the link between the sites | The primary keeps its lease through the witness; the standby can't win a vote. |
+| The witness | Nothing changes day to day (the two vaults are two of three votes), but there's no automatic takeover until it's back: if a site also fails, both sides run in island mode. The page shows a warning. |
+| The witness loses its saved state | It refuses to vote until the current primary gives it the latest election and change numbers, so it can never vote twice in one election. Replacing a witness is done on the primary's page. |
+
+### Network checklist
+
+- A backup internet connection at each site (e.g. the gateway switching to a cellular backup) removes the most common failure.
+- Battery backup (UPS) for each vault machine, the modem and the router.
+- Different local address ranges at each site.
+- Key expiry turned off on both vault machines and the witness. Tailscale keeps existing connections working when the internet is down, but a device that hasn't talked to the vault recently may not find it, so the vault keeps in touch with its own machines.
+
+### Order
+
+1. Sync, island mode and both addresses for clients. Safe on its own, no witness needed; covers most outages for agents.
+2. The witness and automatic takeover.
+3. Optional: three witnesses in different places (five votes, three to win), so takeover still happens with a witness down. Two witnesses would be worse than one.
+
+### Open
+
+- The machine at the second site (a Raspberry Pi or small Linux box is enough; a Mac mini also works).
+- Where the witness runs: a small cloud server on the tailnet, or a Cloudflare Durable Object reached over the internet with a key only the two vaults hold (check pricing first).
 
 ## 8. Machine accounts and an SSH agent
 
