@@ -41,7 +41,9 @@ jobs:
           # A fixed name, so .../releases/latest/download/agentvault-<arch>-linux.tar.gz always works.
           name="agentvault-${ARCH}-linux"
           mkdir -p "dist/$name"
-          cp target/release/agentvault deploy/* README.md LICENSE config.example.toml "dist/$name/"
+          # The Linux files only: deploy/macos is for Mac builds.
+          find deploy -maxdepth 1 -type f -exec cp {} "dist/$name/" \;
+          cp target/release/agentvault README.md LICENSE config.example.toml "dist/$name/"
           cp -r skill "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
@@ -60,6 +62,16 @@ jobs:
     permissions:
       contents: write  # only this job can publish
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Release notes from the changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The section under "## <version>" in CHANGELOG.md, up to the next version.
+          awk -v v="${TAG#v}" '/^## /{f = (index($0, "## " v " ") == 1)} f' CHANGELOG.md | tail -n +2 > notes.md
+          test -s notes.md
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
@@ -67,4 +79,4 @@ jobs:
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: notes.md

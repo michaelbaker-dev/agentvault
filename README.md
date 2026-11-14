@@ -2,7 +2,7 @@
 
 **A secrets vault for your Tailscale network.** Store your API keys once, on a machine you own. Your apps and AI agents use them over HTTPS, without `.env` files scattered around and, through the proxy, without ever holding a key.
 
-> **Status: early (v0.1, not yet released).** It works, is well tested and is in daily use. It has not had an independent security audit, and the automatic rotators have so far been tested only against simulated providers (see [Limitations](#limitations)). Report security problems privately: see [SECURITY.md](SECURITY.md).
+> **Status: early (v0.1.0, the first release).** It works, is well tested and is in daily use. It has not had an independent security audit, and the automatic rotators have so far been tested only against simulated providers (see [Limitations](#limitations)). Report security problems privately: see [SECURITY.md](SECURITY.md).
 
 ![The Secrets page: keys with their provider, risk and status, and a "Needs attention" list](docs/screenshots/secrets.png)
 
@@ -66,11 +66,10 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
 
 | | What | Where it stands |
 |---|---|---|
-| 1 | **First release, v0.1.0**, with downloads for Linux | Next: everything is ready to tag. |
-| 2 | **Finish the Mac version:** Mac downloads, and testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself; these are what's left. |
-| 3 | **Moving the vault** to another machine: a tested procedure and a command, with tokens kept working | Planned |
-| 4 | **A standby vault at a second site.** The standby stays in sync and takes over by itself if the main site loses power or internet. | Designed |
-| 5 | **Machine accounts and an SSH agent:** admin passwords kept owner-only, and the vault signing SSH logins so private keys never leave it | An idea, to come back to |
+| 1 | **Finish the Mac version:** Mac downloads, and testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself; these are what's left. |
+| 2 | **Moving the vault** to another machine: a tested procedure and a command, with tokens kept working | Planned |
+| 3 | **A standby vault at a second site.** The standby stays in sync and takes over by itself if the main site loses power or internet. | Designed |
+| 4 | **Machine accounts and an SSH agent:** admin passwords kept owner-only, and the vault signing SSH logins so private keys never leave it | An idea, to come back to |
 
 **The standby, in short.** The vault is only reachable while its machine is. The plan is a vault at each site and a small "witness" in a third place:
 - The standby copies every change within about a second. The data stays encrypted.
@@ -81,19 +80,14 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
 ## Quick start
 
 1. In the [Tailscale admin console](https://login.tailscale.com/admin/dns), turn on **MagicDNS** and **HTTPS Certificates**.
-2. On the Linux machine that will hold the vault, install it. Until the first release is out, build it from source (needs [Rust](https://rustup.rs) 1.89+):
-   ```sh
-   git clone https://github.com/michaelbaker-dev/agentvault && cd agentvault
-   cargo build --release && sudo deploy/install.sh
-   ```
-   From a release, once there is one (use `aarch64` instead of `x86_64` on ARM):
+2. On the Linux machine that will hold the vault, download and install it. Use `aarch64` instead of `x86_64` on ARM:
    ```sh
    curl -LO https://github.com/michaelbaker-dev/agentvault/releases/latest/download/agentvault-x86_64-linux.tar.gz
    gh attestation verify agentvault-x86_64-linux.tar.gz --repo michaelbaker-dev/agentvault   # optional: proves it was built here
    tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
-   On a Mac, see [On a Mac](#on-a-mac).
+   To build it yourself instead, see [Install](#install). On a Mac, see [On a Mac](#on-a-mac).
 3. Open the address it prints (`https://<machine>.<tailnet>.ts.net`) on one of your devices and choose a passphrase. Then answer **Y** in the terminal to have the vault unlock itself after a reboot.
 4. Add your keys: **Add secret**, or **Import** to paste a whole file.
 5. Make a token on the **Tokens** page for each app or agent, and use it as shown in [Use it](#use-it).
@@ -110,7 +104,7 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
 
 ## Install
 
-**From a release** (no Rust needed, once v0.1.0 is out): see the [Quick start](#quick-start).
+**From a release** (no Rust needed): see the [Quick start](#quick-start).
 
 **From source:**
 
