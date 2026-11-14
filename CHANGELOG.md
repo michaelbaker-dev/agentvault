@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 (2026-11-14)
+
+- Downloads for Macs with Apple silicon (`agentvault-aarch64-macos.tar.gz`), built by GitHub with signed build provenance like the Linux ones. Unpack it and run `./install.sh`; see "On a Mac" in the README.
+- The release workflow can be run by hand to build the downloads for testing without releasing them.
+
 ## 0.1.0 (2026-11-14)
 
 ### macOS

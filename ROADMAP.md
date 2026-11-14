@@ -8,7 +8,7 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | 2 | spandeck integration, phase 2: station token rotation | Done, tested live with spandeck |
 | 3 | spandeck integration, phase 3: exposed-key reports | Done, tested live with spandeck |
 | 4 | First release, v0.1.0 | Done: Linux downloads (x86_64 and ARM64) with signed build provenance |
-| 5 | Mac version | Mostly done: runs, installs and unlocks itself on Apple silicon; Mac downloads and other Tailscale editions left |
+| 5 | Mac version | Mostly done: Apple silicon downloads from 0.1.1; the App Store and open-source Tailscale editions are still to test |
 | 6 | Moving the vault | Planned |
 | 7 | Standby vault at a second site, with automatic takeover | Designed, to come back to |
 | 8 | Machine accounts and an SSH agent | Idea, to come back to |
@@ -45,7 +45,7 @@ Same code and repository. Built and tested on an Apple silicon Mac (macOS 26) wi
 | Port | 443 | 9443 or the next free port (a normal account can't use 443) | Done |
 | Process hardening | `prctl` (no dumps), systemd sandbox | `PT_DENY_ATTACH`, no core dumps | Done |
 | Install | `install.sh`, `uninstall.sh` | `deploy/macos/install.sh`, `uninstall.sh` | Done; shellcheck in CI |
-| Downloads | x86_64 and ARM64 Linux | Apple silicon, built on the owner's build Mac rather than paid CI runners | To do, with the first release |
+| Downloads | x86_64 and ARM64 Linux | Apple silicon, built by GitHub's macOS runners (free for public repositories) with signed build provenance | Done in 0.1.1 |
 
 Still open:
 - test the App Store app and the open-source `tailscaled`;

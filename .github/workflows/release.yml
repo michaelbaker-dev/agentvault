@@ -1,10 +1,13 @@
 name: Release
 
-# Push a tag like v0.1.0 to build Linux downloads, record signed build
-# provenance for them, and attach them to a GitHub release.
+# Push a tag like v0.1.0 to build the Linux and Mac downloads, record signed
+# build provenance for them, and attach them to a GitHub release. Running it
+# by hand (workflow_dispatch) builds the downloads without releasing them, to
+# test them first.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 # Nothing gets write access unless a job below asks for it.
 permissions:
@@ -12,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build ${{ matrix.arch }}-${{ matrix.os }}
     permissions:
       contents: read
       id-token: write      # to sign the build provenance
@@ -23,9 +26,15 @@ jobs:
           # Ubuntu 22.04 keeps the glibc requirement low (2.35), so the binary
           # runs on Debian 12, Ubuntu 22.04+ and similar.
           - arch: x86_64
+            os: linux
             runner: ubuntu-22.04
           - arch: aarch64
+            os: linux
             runner: ubuntu-22.04-arm
+          # Apple silicon. The binary runs on macOS 11 and later.
+          - arch: aarch64
+            os: macos
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -37,27 +46,33 @@ jobs:
       - name: Package
         env:
           ARCH: ${{ matrix.arch }}
+          OS: ${{ matrix.os }}
         run: |
-          # A fixed name, so .../releases/latest/download/agentvault-<arch>-linux.tar.gz always works.
-          name="agentvault-${ARCH}-linux"
+          # A fixed name, so .../releases/latest/download/agentvault-<arch>-<os>.tar.gz always works.
+          name="agentvault-${ARCH}-${OS}"
           mkdir -p "dist/$name"
-          # The Linux files only: deploy/macos is for Mac builds.
-          find deploy -maxdepth 1 -type f -exec cp {} "dist/$name/" \;
+          if [ "$OS" = macos ]; then
+            cp deploy/macos/*.sh "dist/$name/"
+          else
+            # deploy's own files; deploy/macos is for the Mac archive.
+            find deploy -maxdepth 1 -type f -exec cp {} "dist/$name/" \;
+          fi
           cp target/release/agentvault README.md LICENSE config.example.toml "dist/$name/"
           cp -r skill "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
       - name: Record build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: dist/*.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: agentvault-${{ matrix.arch }}
+          name: agentvault-${{ matrix.arch }}-${{ matrix.os }}
           path: dist/*.tar.gz*
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
       contents: write  # only this job can publish

@@ -66,7 +66,7 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
 
 | | What | Where it stands |
 |---|---|---|
-| 1 | **Finish the Mac version:** Mac downloads, and testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself; these are what's left. |
+| 1 | **Finish the Mac version:** testing with the App Store Tailscale app and the open-source `tailscaled` | The Mac version runs, installs and unlocks itself, with downloads for Apple silicon; tested with the standalone Tailscale app. |
 | 2 | **Moving the vault** to another machine: a tested procedure and a command, with tokens kept working | Planned |
 | 3 | **A standby vault at a second site.** The standby stays in sync and takes over by itself if the main site loses power or internet. | Designed |
 | 4 | **Machine accounts and an SSH agent:** admin passwords kept owner-only, and the vault signing SSH logins so private keys never leave it | An idea, to come back to |
@@ -87,7 +87,7 @@ In order. The details, decisions and open questions are in [ROADMAP.md](ROADMAP.
    tar -xzf agentvault-x86_64-linux.tar.gz && cd agentvault-x86_64-linux
    sudo ./install.sh
    ```
-   To build it yourself instead, see [Install](#install). On a Mac, see [On a Mac](#on-a-mac).
+   On a Mac (Apple silicon), see [On a Mac](#on-a-mac). To build it yourself instead, see [Install](#install).
 3. Open the address it prints (`https://<machine>.<tailnet>.ts.net`) on one of your devices and choose a passphrase. Then answer **Y** in the terminal to have the vault unlock itself after a reboot.
 4. Add your keys: **Add secret**, or **Import** to paste a whole file.
 5. Make a token on the **Tokens** page for each app or agent, and use it as shown in [Use it](#use-it).
@@ -139,12 +139,18 @@ From a source checkout, it's `deploy/uninstall.sh`.
 
 ### On a Mac
 
-The vault runs as a background service for your own account, so the installer needs no `sudo`:
+The vault runs as a background service for your own account, so the installer needs no `sudo`. On an Apple silicon Mac, in Terminal:
 
 ```sh
-cargo build --release && deploy/macos/install.sh     # install or upgrade
-deploy/macos/uninstall.sh [--purge]                  # remove (--purge also deletes the vault)
+curl -LO https://github.com/michaelbaker-dev/agentvault/releases/latest/download/agentvault-aarch64-macos.tar.gz
+tar -xzf agentvault-aarch64-macos.tar.gz && cd agentvault-aarch64-macos
+./install.sh                 # install or upgrade
+./uninstall.sh [--purge]     # remove (--purge also deletes the vault)
 ```
+
+Download it with `curl` as shown. The program isn't signed with an Apple developer ID, so a copy downloaded in a web browser is blocked by macOS until you clear its quarantine flag (`xattr -dr com.apple.quarantine agentvault-aarch64-macos`).
+
+From source: `cargo build --release && deploy/macos/install.sh`, and `deploy/macos/uninstall.sh` to remove it.
 
 How it differs from Linux:
 
@@ -379,7 +385,7 @@ Not covered:
 
 - **One machine.** While the vault's machine is down, apps can't get their keys. A [standby at a second site](#whats-planned) is planned.
 - **One owner per vault.** Only one Tailscale login can sign in to the web interface. Other people and programs use tokens.
-- **The vault machine runs Linux with systemd, or macOS.** On macOS only the standalone Tailscale app has been tested so far, and there are no Mac downloads yet: build from source. Your other devices can be anything on the tailnet.
+- **The vault machine runs Linux with systemd, or macOS.** On macOS only the standalone Tailscale app has been tested so far, and downloads are for Apple silicon only (Intel Macs can build from source). Your other devices can be anything on the tailnet.
 - **Tailscale only.** It relies on tailscaled for device identity and certificates. Headscale and other control servers are untested.
 - **The automatic rotators are tested only against simulated providers.** That covers OpenRouter, Cloudflare, Tailscale, Azure and Google, and the renewal for GitHub Apps, Tailscale OAuth and Slack. The checks that ask a provider what a key can do have been run against many of the real services. Try a rotation on a key you can afford to lose first, and please report what you find.
 - **No independent security audit yet.**

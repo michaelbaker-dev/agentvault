@@ -171,4 +171,5 @@ case $STATE in
 esac
 [ "$want" = yes ] && echo "It will unlock itself after restarts once you've signed in there."
 [ "$want" = no ] && echo "To unlock it automatically later: $APP/bin/agentvault auto-unlock -c \"$CONF\" --at-next-sign-in, then sign in."
-echo "Logs: $LOGS/agentvault.log   Uninstall: deploy/macos/uninstall.sh"
+if [ -f deploy/macos/uninstall.sh ]; then UNINSTALL=deploy/macos/uninstall.sh; else UNINSTALL=./uninstall.sh; fi
+echo "Logs: $LOGS/agentvault.log   Uninstall: $UNINSTALL"
