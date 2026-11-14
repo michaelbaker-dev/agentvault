@@ -117,6 +117,12 @@ impl Config {
         (!p.is_empty()).then_some(p)
     }
 
+    /// macOS: present while automatic unlock is wanted but the passphrase
+    /// isn't in the Keychain yet; the next sign-in stores it.
+    pub fn auto_unlock_marker(&self) -> PathBuf {
+        self.data_dir.join("auto-unlock-wanted")
+    }
+
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
         let mut cfg: Config = toml::from_str(&text).map_err(|e| format!("parsing {}: {e}", path.display()))?;

@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+### macOS
+
+- The vault builds and runs on macOS (tested on Apple silicon, macOS 26): `deploy/macos/install.sh` installs it as a launchd agent for your account (no sudo), on port 9443 or the next free one; `deploy/macos/uninstall.sh [--purge]` removes it.
+- Caller identity through the Mac Tailscale apps' local API (a localhost port with a same-user-proof password), found afresh on each call; `agentvault whois ADDRESS` checks it.
+- Automatic unlock through the login Keychain: the vault stores the passphrase at your next sign-in, owns the item so other programs get a prompt instead, and follows passphrase changes. Upgrades have the old program remove its item; sign in once to store it again. `agentvault auto-unlock -c CONFIG [--off | --at-next-sign-in]`.
+- Debuggers are refused with `PT_DENY_ATTACH` (Linux keeps `PR_SET_DUMPABLE`).
+
 ### Since the first helper changes
 
 - `github-push` sends text files inside each commit's tree request (about two requests per commit instead of one per file; a 183-file push went from 71 s to 9 s), waits and retries when GitHub asks to slow down, and carries on from a push into an empty repository that stopped partway.

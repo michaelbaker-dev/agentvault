@@ -11,6 +11,7 @@ mod describe;
 mod identity;
 mod import;
 mod import_api;
+mod keychain;
 mod material;
 mod mcp;
 mod providers;
@@ -79,6 +80,19 @@ enum Cmd {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+    /// macOS: store the passphrase in your login Keychain so the vault unlocks
+    /// itself after a restart (`--off` removes it). On Linux use
+    /// `sudo /usr/local/lib/agentvault/auto-unlock`.
+    AutoUnlock {
+        #[arg(short, long)]
+        config: PathBuf,
+        /// Remove the stored passphrase.
+        #[arg(long, conflicts_with = "at_next_sign_in")]
+        off: bool,
+        /// Store it the next time you sign in on the web page, instead of asking here.
+        #[arg(long)]
+        at_next_sign_in: bool,
+    },
     /// Show what importing a key file would create, with every value masked.
     /// Reads the file locally; nothing is stored or sent anywhere.
     ImportPreview { file: PathBuf },
@@ -143,6 +157,77 @@ fn harden_process() {
     }
 }
 
+/// Reads a line from the terminal with echo off.
+fn read_secret(prompt: &str) -> Result<Zeroizing<String>, String> {
+    use std::io::{BufRead, Write};
+    use std::os::fd::AsRawFd;
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|_| "this needs a terminal to ask for your passphrase".to_string())?;
+    let fd = tty.as_raw_fd();
+    // SAFETY: termios is plain data; fd is an open terminal for the whole call.
+    let saved = unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut t) != 0 {
+            return Err("couldn't turn off echo on the terminal".into());
+        }
+        let saved = t;
+        t.c_lflag &= !libc::ECHO;
+        libc::tcsetattr(fd, libc::TCSANOW, &t);
+        saved
+    };
+    let _ = write!(&tty, "{prompt}");
+    let mut line = Zeroizing::new(String::new());
+    let read = std::io::BufReader::new(&tty).read_line(&mut line);
+    // SAFETY: as above.
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };
+    let _ = writeln!(&tty);
+    read.map_err(|e| e.to_string())?;
+    Ok(Zeroizing::new(line.trim_end_matches(['\n', '\r']).to_string()))
+}
+
+fn auto_unlock(cfg: &Config, off: bool, at_next_sign_in: bool) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("on Linux, run: sudo /usr/local/lib/agentvault/auto-unlock".into());
+    }
+    let marker = cfg.auto_unlock_marker();
+    if at_next_sign_in {
+        std::fs::write(&marker, b"").map_err(|e| format!("writing {}: {e}", marker.display()))?;
+        println!(
+            "The next time you sign in at {}, the vault stores your passphrase for automatic unlock.",
+            cfg.origin()
+        );
+        return Ok(());
+    }
+    if off {
+        let _ = std::fs::remove_file(&marker);
+        let had = keychain::delete()?;
+        println!(
+            "{} Restart the vault; after that, sign in at {} to unlock it.",
+            if had {
+                "Removed the stored passphrase."
+            } else {
+                "No passphrase was stored."
+            },
+            cfg.origin()
+        );
+        return Ok(());
+    }
+    let db = Db::open(&cfg.db_path()).map_err(|e| format!("opening the vault's database: {e}"))?;
+    if !Vault::is_initialized(&db).map_err(|e| e.to_string())? {
+        return Err(format!("set your passphrase first: open {} in a browser", cfg.origin()));
+    }
+    let pass = read_secret("Your vault passphrase (not shown): ")?;
+    Vault::default()
+        .unlock(&db, &pass)
+        .map_err(|_| "that passphrase doesn't unlock this vault. Nothing was stored.".to_string())?;
+    keychain::set(&pass)?;
+    println!("Stored in your login Keychain. Only the agentvault program can read it without macOS asking you first.");
+    Ok(())
+}
+
 async fn tailscale_cert(cfg: &Config) {
     let out = tokio::process::Command::new("tailscale")
         .arg("cert")
@@ -202,7 +287,16 @@ async fn serve(cfg: Config) -> Result<(), String> {
         _ => {}
     }
 
-    if let Some(pass) = cfg.unlock_passphrase() {
+    // A passphrase file or systemd credential first, then (macOS) the Keychain.
+    let stored = match cfg.unlock_passphrase() {
+        Some(p) => Ok(Some(p)),
+        None => keychain::get(),
+    };
+    if let Err(e) = &stored {
+        app.auto_unlock.set(AutoUnlock::FAILED);
+        tracing::warn!("automatic unlock failed: {e}. Sign in to unlock in the meantime");
+    }
+    if let Ok(Some(pass)) = stored {
         let a = app.clone();
         let res = tokio::task::spawn_blocking(move || {
             if Vault::is_initialized(&a.db)? {
@@ -224,9 +318,12 @@ async fn serve(cfg: Config) -> Result<(), String> {
             }
             Err(e) => {
                 app.auto_unlock.set(AutoUnlock::FAILED);
-                tracing::warn!(
-                    "automatic unlock failed: {e}. Sign in to unlock, then run `sudo /usr/local/lib/agentvault/auto-unlock` to store the current passphrase"
-                );
+                let fix = if cfg!(target_os = "macos") {
+                    "agentvault auto-unlock -c <config>"
+                } else {
+                    "sudo /usr/local/lib/agentvault/auto-unlock"
+                };
+                tracing::warn!("automatic unlock failed: {e}. Sign in to unlock, then run `{fix}` to store the current passphrase");
             }
         }
     }
@@ -299,6 +396,11 @@ async fn main() -> ExitCode {
         }),
         Cmd::CheckConfig { config } => Config::load(&config).map(|cfg| println!("ok: {} on {}", cfg.origin(), cfg.listen)),
         Cmd::ImportPreview { file } => import_preview(&file),
+        Cmd::AutoUnlock {
+            config,
+            off,
+            at_next_sign_in,
+        } => Config::load(&config).and_then(|cfg| auto_unlock(&cfg, off, at_next_sign_in)),
         Cmd::Whois { addr, socket } => {
             let socket = socket.unwrap_or_else(config::default_socket);
             identity::whois(&socket, SocketAddr::new(addr, 0)).await.map(|c| {

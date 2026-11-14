@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: shellcheck -S error deploy/install.sh deploy/uninstall.sh deploy/auto-unlock deploy/refresh-cert
+      - run: shellcheck -S error deploy/install.sh deploy/uninstall.sh deploy/auto-unlock deploy/refresh-cert deploy/macos/install.sh deploy/macos/uninstall.sh
       - run: python3 -m py_compile skill/agentvault/scripts/agentvault-cli
 
   secrets:

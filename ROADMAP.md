@@ -8,9 +8,10 @@ What's planned next for AgentVault, in order. Each step ships with tests, README
 | 2 | spandeck integration, phase 2: station token rotation | Done, tested live with spandeck |
 | 3 | spandeck integration, phase 3: exposed-key reports | Done, tested live with spandeck |
 | 4 | First release, v0.1.0 | Waiting: the repository stays private for now. Then: make it public, turn on private vulnerability reporting, tag `v0.1.0` (ARM builds need a public repository) |
-| 5 | Mac version | Next |
+| 5 | Mac version | Mostly done: runs, installs and unlocks itself on Apple silicon; Mac downloads and other Tailscale editions left |
 | 6 | Moving the vault | Planned |
 | 7 | Hot standby | Planned |
+| 8 | Machine accounts and an SSH agent | Idea, to come back to |
 
 Smaller improvements land as they come up; see the CHANGELOG.
 
@@ -33,19 +34,23 @@ The contract, decisions and task lists are agreed with the spandeck project and 
 
 ## 5. Mac version
 
-Same code and repository, released alongside the Linux builds.
+Same code and repository. Built and tested on an Apple silicon Mac (macOS 26) with the standalone Tailscale app.
 
-| Part | Linux today | Mac |
-|---|---|---|
-| Service | systemd units | launchd job (`/Library/LaunchDaemons`) |
-| Unlock at boot | systemd credential | macOS Keychain item readable only by the service |
-| Device identity | tailscaled's LocalAPI socket | Each Mac Tailscale edition (App Store, standalone, open-source `tailscaled`) exposes LocalAPI differently: detect which is installed, support all three |
-| HTTPS certificate | `tailscale cert`, refreshed weekly by a timer | The same command, refreshed by launchd |
-| Process hardening | `prctl` (no dumps), systemd sandbox | `PT_DENY_ATTACH`, no core dumps, a dedicated service user |
-| Install | `install.sh`, `uninstall.sh` | Mac versions of both, with the same prerequisite checks |
-| Downloads | x86_64 and ARM64 Linux | Apple Silicon and Intel, built and tested in CI on macOS runners |
+| Part | Linux | Mac | State |
+|---|---|---|---|
+| Service | systemd, a dedicated system user | A launchd agent for the owner's own (admin) account, in their login session; no sudo to install | Done |
+| Unlock at boot | systemd credential | Login Keychain item owned by the vault program, stored at the next web sign-in; upgrades re-arm with one sign-in | Done |
+| Device identity | tailscaled's LocalAPI socket | Standalone app: localhost port + same-user-proof file; App Store app: group container; open-source `tailscaled`: socket | Standalone tested; App Store and `tailscaled` written, untested |
+| HTTPS certificate | `tailscale cert`, refreshed by a timer | The vault runs `tailscale cert` itself every 6 hours | Done |
+| Port | 443 | 9443 or the next free port (a normal account can't use 443) | Done |
+| Process hardening | `prctl` (no dumps), systemd sandbox | `PT_DENY_ATTACH`, no core dumps | Done |
+| Install | `install.sh`, `uninstall.sh` | `deploy/macos/install.sh`, `uninstall.sh` | Done; shellcheck in CI |
+| Downloads | x86_64 and ARM64 Linux | Apple silicon, built on the owner's build Mac rather than paid CI runners | To do, with the first release |
 
-Open: whether the Keychain item can be read at boot before anyone logs in (decides between the System keychain and a root-only file), and which Tailscale editions to test on.
+Still open:
+- test the App Store app and the open-source `tailscaled`;
+- spandeck looks for a vault on port 443 only; it needs to accept a port in the vault's address (to agree in the shared doc);
+- log rotation for `~/Library/Logs/AgentVault`.
 
 ## 6. Moving the vault
 
@@ -77,3 +82,12 @@ Open:
 - the replication mechanism (vault-to-vault pull over the tailnet, or shipping the database's write-ahead log);
 - how long the primary must be gone before reduced mode starts;
 - how the usage log written on a standby is merged back.
+
+## 8. Machine accounts and an SSH agent
+
+An idea to come back to, from setting up the build Mac.
+
+- **Machine passwords** (a Mac's admin password, a server's root password) already fit the vault's password type: owner-only by default, revealed or copied from the web page, never seen by agents.
+- **Agents that need root** should get narrow sudo rules on each machine (named commands, no password), not an admin password. Handing an agent the password through `agentvault-cli run` works, but gives it full admin rights; the vault would only add a log line and a revoke button.
+- **The vault as an SSH agent:** it keeps SSH private keys and signs logins on request over the tailnet, like 1Password's SSH agent. The key never leaves the vault, every login is logged and limited by token, and revoking a token cuts access at once. Tailscale SSH (access decided by tailnet rules, no keys) is the alternative for machines on the tailnet.
+

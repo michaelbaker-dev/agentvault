@@ -379,9 +379,13 @@ async fn setup(State(app): State<AppRef>, Extension(caller): Extension<Caller>, 
     let _permit = app.kdf_gate.acquire().await.map_err(ApiError::internal)?;
     let a = app.clone();
     let pass = Zeroizing::new(body.passphrase.clone());
-    tokio::task::spawn_blocking(move || a.vault.initialize(&a.db, &pass, a.kdf))
-        .await
-        .map_err(ApiError::internal)??;
+    tokio::task::spawn_blocking(move || {
+        a.vault.initialize(&a.db, &pass, a.kdf)?;
+        arm_keychain(&a, &pass);
+        Ok::<_, VaultError>(())
+    })
+    .await
+    .map_err(ApiError::internal)??;
     Ok(session_response(&app, &caller, ev))
 }
 
@@ -404,6 +408,26 @@ async fn login(State(app): State<AppRef>, Extension(caller): Extension<Caller>, 
     Ok(session_response(&app, &caller, ev))
 }
 
+/// macOS: when automatic unlock was asked for (the installer, or
+/// `agentvault auto-unlock --at-next-sign-in`, leaves a marker), stores the
+/// passphrase the owner just proved in the login Keychain. The vault runs in
+/// the owner's login session, so it can, and the item then belongs to this
+/// program: anything else running as the owner gets a prompt instead.
+fn arm_keychain(app: &crate::app::App, passphrase: &str) {
+    let marker = app.cfg.auto_unlock_marker();
+    if !cfg!(target_os = "macos") || !marker.exists() {
+        return;
+    }
+    match crate::keychain::set(passphrase) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&marker);
+            app.auto_unlock.set(AutoUnlock::ON);
+            tracing::info!("automatic unlock is on: the passphrase is stored in the login Keychain");
+        }
+        Err(e) => tracing::warn!("couldn't store the passphrase in the Keychain for automatic unlock: {e}"),
+    }
+}
+
 /// Verifies the passphrase (unsealing if needed) under the attempt limiter.
 async fn check_passphrase(app: &AppRef, caller: &Caller, passphrase: &str, ev: &EventInfo) -> ApiResult<()> {
     if let Err(secs) = app.limiter.begin(caller.ip) {
@@ -416,9 +440,13 @@ async fn check_passphrase(app: &AppRef, caller: &Caller, passphrase: &str, ev: &
     let _permit = app.kdf_gate.acquire().await.map_err(ApiError::internal)?;
     let a = app.clone();
     let pass = Zeroizing::new(passphrase.to_string());
-    match tokio::task::spawn_blocking(move || a.vault.unlock(&a.db, &pass))
-        .await
-        .map_err(ApiError::internal)?
+    match tokio::task::spawn_blocking(move || {
+        a.vault.unlock(&a.db, &pass)?;
+        arm_keychain(&a, &pass);
+        Ok(())
+    })
+    .await
+    .map_err(ApiError::internal)?
     {
         Ok(()) => {
             app.limiter.success(caller.ip);
@@ -516,10 +544,13 @@ async fn change_passphrase(
         // Does the stored boot passphrase still match?
         let mut stale = false;
         if a.auto_unlock.get() != AutoUnlock::OFF {
-            stale = a
-                .cfg
-                .unlock_passphrase()
-                .is_none_or(|stored| crate::crypto::sha256(stored.as_bytes()) != crate::crypto::sha256(new.as_bytes()));
+            // On macOS the vault owns its Keychain item, so it follows the change.
+            let keychain_mode = a.cfg.unlock.passphrase_file.is_none() && std::env::var_os("CREDENTIALS_DIRECTORY").is_none();
+            let moved = cfg!(target_os = "macos") && keychain_mode && crate::keychain::set(&new).is_ok();
+            stale = !moved
+                && a.cfg
+                    .unlock_passphrase()
+                    .is_none_or(|stored| crate::crypto::sha256(stored.as_bytes()) != crate::crypto::sha256(new.as_bytes()));
             a.auto_unlock.set(if stale { AutoUnlock::STALE } else { AutoUnlock::ON });
         }
         Ok::<_, crate::vault::VaultError>(stale)

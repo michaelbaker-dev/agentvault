@@ -56,7 +56,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
 ## Requirements
 
 - **The vault machine:**
-  - Linux with systemd (for example Debian 12+, Ubuntu 22.04+ or Fedora), on x86_64 or ARM64;
+  - Linux with systemd (for example Debian 12+, Ubuntu 22.04+ or Fedora), on x86_64 or ARM64; or a Mac (see [On a Mac](#on-a-mac));
   - `python3` and `curl`, used by the installer;
   - **Tailscale**, signed in, with MagicDNS and HTTPS Certificates turned on for your tailnet;
   - port 443 free on its Tailscale address (another port works too, see [Change the address or port](#change-the-address-or-port)).
@@ -98,9 +98,31 @@ sudo ./uninstall.sh --purge    # also securely deletes the vault and settings (a
 
 From a source checkout, it's `deploy/uninstall.sh`.
 
+### On a Mac
+
+The vault runs as a background service for your own account, so the installer needs no `sudo`:
+
+```sh
+cargo build --release && deploy/macos/install.sh     # install or upgrade
+deploy/macos/uninstall.sh [--purge]                  # remove (--purge also deletes the vault)
+```
+
+How it differs from Linux:
+
+| | Mac |
+|---|---|
+| Address | `https://<your-mac>.<tailnet>.ts.net:9443`. A normal account can't use port 443 on macOS, so the installer picks the first free port from 9443. |
+| Runs | While you're logged in (a launchd agent in your session). Keep the Mac logged in, as for any always-on service. |
+| Files | `~/Library/Application Support/AgentVault`, logs in `~/Library/Logs/AgentVault` |
+| Tailscale | The standalone app from tailscale.com (tested), the App Store app, or the open-source `tailscaled` |
+| Automatic unlock | Your passphrase is stored in your login Keychain the next time you sign in on the web page (the installer asks). The vault creates the item itself, so only the vault program can read it without macOS asking you: another program running as you, an AI agent's shell included, gets a prompt instead. After an upgrade, sign in once and it's stored again for the new program. |
+| Memory protection | Debuggers can't attach to the vault (`PT_DENY_ATTACH`), and it never writes core dumps. |
+
+Anything running as your account can still reach the vault's files, so on a shared or busy Mac the database's encryption and the Keychain are what protect your keys.
+
 ### Unlocking after a reboot
 
-The vault's encryption key lives only in memory, so after a restart it starts **locked**: apps get `503` until it's unlocked. You can sign in after each restart, or have it unlock itself:
+The vault's encryption key lives only in memory, so after a restart it starts **locked**: apps get `503` until it's unlocked. You can sign in after each restart, or have it unlock itself (on a Mac, see [On a Mac](#on-a-mac)):
 
 ```sh
 sudo /usr/local/lib/agentvault/auto-unlock        # asks for your passphrase, restarts the vault, checks it unlocked
@@ -316,7 +338,7 @@ Not covered:
 ## Limitations
 
 - **One owner per vault.** Only one Tailscale login can sign in to the web interface. Other people and programs use tokens.
-- **The vault machine must run Linux with systemd.** Your other devices can be anything on the tailnet.
+- **The vault machine runs Linux with systemd, or macOS.** On macOS only the standalone Tailscale app has been tested so far, and there are no Mac downloads yet: build from source. Your other devices can be anything on the tailnet.
 - **Tailscale only.** It relies on tailscaled for device identity and certificates. Headscale and other control servers are untested.
 - **The automatic rotators are tested only against simulated providers.** That covers OpenRouter, Cloudflare, Tailscale, Azure and Google, and the renewal for GitHub Apps, Tailscale OAuth and Slack. The checks that ask a provider what a key can do have been run against many of the real services. Try a rotation on a key you can afford to lose first, and please report what you find.
 - **No independent security audit yet.**

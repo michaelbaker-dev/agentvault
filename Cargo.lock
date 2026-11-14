@@ -33,6 +33,7 @@ dependencies = [
  "reqwest",
  "rpassword",
  "rusqlite",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
