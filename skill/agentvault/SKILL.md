@@ -31,7 +31,7 @@ The owner keeps their API keys in a vault on their Tailscale network. You can us
 | `agentvault-cli check` | Shows whether the vault is reachable and unlocked, and how many keys this token can use. |
 | `agentvault-cli list [word]` | Lists usable keys with provider, risk and whether the proxy can reach them. No values. |
 | `agentvault-cli describe NAME` | Shows what a key is for, its account, its risk, and `proxy_target` (the address `call` paths are relative to). |
-| `agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'K: V'] [-d JSON or @file]` | Calls the provider through the vault, showing how long the vault and the provider each took. Example: `agentvault-cli call OPENAI_API_KEY /v1/models` |
+| `agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'K: V'] [-d JSON or @file] [-o FILE]` | Calls the provider through the vault, showing how long the vault and the provider each took. Example: `agentvault-cli call OPENAI_API_KEY /v1/models`. Replies over 100 KB are cut when shown; `-o FILE` saves the whole reply (`-o -` writes it to stdout for a pipe), then read it with `jq`, `grep` or `head`. |
 | `agentvault-cli run NAME[=ENVVAR] ... -- COMMAND` | Runs a program with the key in its environment, with the value blanked out of its output. Needs a token with the read scope. Use it for running the user's own code or tests. |
 | `agentvault-cli github-push OWNER/REPO [--branch B] [-C DIR] [--dry-run]` | Pushes a local branch to GitHub through the vault. See "Pushing to GitHub" below. |
 

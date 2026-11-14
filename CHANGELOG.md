@@ -11,6 +11,7 @@
 
 ### Since the first helper changes
 
+- `agentvault-cli call ... -o FILE` saves the whole reply (`-o -` writes it to stdout for a pipe); shown replies still stop at 100 KB and now say how to get the rest. MCP `proxy_request` keeps its 100 KB limit, which protects the agent's context, and a cut reply now carries a `truncated_note` saying how to get all of it.
 - `github-push` sends text files inside each commit's tree request (about two requests per commit instead of one per file; a 183-file push went from 71 s to 9 s), waits and retries when GitHub asks to slow down, and carries on from a push into an empty repository that stopped partway.
 - Proxied replies carry a `Server-Timing` header (`agentvault` and `provider` durations); MCP results include `timing_ms`; `agentvault-cli call` shows both.
 - New key type **UniFi console API key (local)**, told apart from Site Manager keys by words in the name (network API, protect, console, UDM...). It isn't checked against Ubiquiti's cloud, so local keys no longer show as rejected.

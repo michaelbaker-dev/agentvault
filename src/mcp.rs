@@ -75,7 +75,7 @@ fn tools_for(p: &Principal) -> Vec<Value> {
         tools.push(json!({
             "name": "proxy_request",
             "title": "Call an API with a stored key",
-            "description": "Send an HTTP request to the provider a stored key belongs to (for example api.openai.com for an OpenAI key). The vault adds the key's authentication itself; do not include any credentials. `path` is relative to the provider's API base (see describe_secret), e.g. '/v1/models'. Returns status, content type and up to 100 KB of response body. A GET that the provider redirects to a download link (GitHub's CI logs, for example) is followed for you, without the key, to public servers only.",
+            "description": "Send an HTTP request to the provider a stored key belongs to (for example api.openai.com for an OpenAI key). The vault adds the key's authentication itself; do not include any credentials. `path` is relative to the provider's API base (see describe_secret), e.g. '/v1/models'. Returns status, content type and up to 100 KB of response body (to protect your context); for more, ask for less (pagination, filters) or save the whole reply to a file with `agentvault-cli call NAME PATH -o FILE`. A GET that the provider redirects to a download link (GitHub's CI logs, for example) is followed for you, without the key, to public servers only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -374,6 +374,13 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     out["timing_ms"] = json!({ "vault": ms(vault_time), "provider": ms(upstream) });
     if let Some(host) = download {
         out["downloaded_from"] = json!(host);
+    }
+    if truncated {
+        out["truncated_note"] = json!(format!(
+            "Only the first {} KB is shown, to protect your context. Ask for less (pagination or filters), or save the whole \
+             reply to a file with the helper: agentvault-cli call NAME PATH -o FILE",
+            MAX_TOOL_BODY / 1000
+        ));
     }
     if let Some(l) = location {
         out["location"] = json!(l);

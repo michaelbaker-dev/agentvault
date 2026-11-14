@@ -255,6 +255,7 @@ agentvault-cli check                                 # reachable, unlocked, toke
 agentvault-cli list [word]                           # keys this token may use; no values
 agentvault-cli describe GITHUB_TOKEN                 # what it's for, risk, proxy address
 agentvault-cli call GITHUB_TOKEN /user               # call the provider through the vault
+agentvault-cli call GITHUB_TOKEN /repos/O/R/actions/runs -o runs.json   # save a big reply whole (shown replies stop at 100 KB)
 agentvault-cli run OPENAI_API_KEY -- python app.py   # program gets the key; output has it blanked (needs read scope)
 agentvault-cli github-push OWNER/REPO               # push this clone's branch through the vault (no git credentials)
 ```

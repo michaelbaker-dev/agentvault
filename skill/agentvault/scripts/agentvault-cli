@@ -11,6 +11,8 @@
   agentvault-cli describe NAME              what one key is for, its risk, and how the proxy reaches it
   agentvault-cli call NAME PATH [options]   call the key's provider through the vault's proxy
       -X METHOD   -q 'a=1&b=2'   -H 'Name: value'   -d '{"json": 1}' | -d @file
+      -o FILE     save the whole reply to FILE (- for stdout) instead of showing
+                  the first 100 KB: for big replies, logs and downloads
   agentvault-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]
                                             run COMMAND with keys in its environment; the values
                                             are blanked out of its output (needs the read scope)
@@ -243,9 +245,9 @@ def refused_by_vault(status, text):
 
 def cmd_call(args):
     if len(args) < 2:
-        die("usage: agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file]")
+        die("usage: agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'Name: value'] [-d BODY|@file] [-o FILE]")
     name, path, rest = args[0], args[1], args[2:]
-    method, query, headers, body = "GET", "", {}, None
+    method, query, headers, body, out_file = "GET", "", {}, None, None
     i = 0
     while i < len(rest):
         flag = rest[i]
@@ -263,6 +265,8 @@ def cmd_call(args):
             body = open(val[1:], "rb").read() if val.startswith("@") else val.encode()
             if method == "GET":
                 method = "POST"
+        elif flag == "-o":
+            out_file = val
         else:
             die(f"unknown option {flag}")
         i += 2
@@ -280,7 +284,8 @@ def cmd_call(args):
     if location and method == "GET" and urllib.parse.urlsplit(location).scheme == "https":
         # A download link (GitHub's CI logs and artifacts, for example) is
         # signed and needs no key: fetch it with no credentials at all.
-        print(f"HTTP {status}: following the download link to {urllib.parse.urlsplit(location).hostname} without credentials")
+        print(f"HTTP {status}: following the download link to {urllib.parse.urlsplit(location).hostname} without credentials",
+              file=sys.stderr if out_file == "-" else sys.stdout)
         try:
             resp = urllib.request.urlopen(urllib.request.Request(location), timeout=120)
             status, text, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
@@ -289,10 +294,24 @@ def cmd_call(args):
         except (urllib.error.URLError, OSError) as e:
             die(f"Couldn't fetch the download link: {getattr(e, 'reason', e)}")
     elif location:
-        print(f"Location: {location}")
+        print(f"Location: {location}", file=sys.stderr if out_file == "-" else sys.stdout)
     timing = dict(re.findall(r"(agentvault|provider);dur=([0-9.]+)", hdrs.get("Server-Timing", "")))
     took = f"  (vault {float(timing['agentvault']):.0f} ms, provider {float(timing['provider']):.0f} ms)" if len(timing) == 2 else ""
+    if out_file == "-":
+        print(f"HTTP {status}  {ctype}{took}  {len(text)} bytes", file=sys.stderr)
+        sys.stdout.buffer.write(text)
+        sys.stdout.flush()
+        sys.exit(0 if status < 400 else 2)
     print(f"HTTP {status}  {ctype}{took}")
+    if out_file:
+        try:
+            fd = os.open(out_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(text)
+        except OSError as e:
+            die(f"Couldn't write {out_file}: {e}")
+        print(f"Saved {len(text)} bytes to {out_file}")
+        sys.exit(0 if status < 400 else 2)
     shown = text[:MAX_SHOW].decode("utf-8", "replace")
     if "json" in ctype:
         try:
@@ -301,7 +320,7 @@ def cmd_call(args):
             pass
     print(shown)
     if len(text) > MAX_SHOW:
-        print(f"\n[truncated: {len(text)} bytes in all]")
+        print(f"\n[truncated: {len(text)} bytes in all. Add -o FILE to save all of it.]")
     sys.exit(0 if status < 400 else 2)
 
 
