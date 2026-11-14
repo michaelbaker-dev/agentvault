@@ -11,6 +11,11 @@
   agentvault-cli run NAME[=ENVVAR] ... -- COMMAND [ARGS]
                                             run COMMAND with keys in its environment; the values
                                             are blanked out of its output (needs the read scope)
+  agentvault-cli github-push OWNER/REPO [--branch B] [--key NAME] [-C DIR] [--dry-run]
+                                            push this clone's commits to GitHub through the vault:
+                                            no SSH key, no git credentials, the key never leaves
+                                            the vault. Fast-forward only. Needs a token whose
+                                            proxy allows more than GET.
 
 Settings: AGENTVAULT_URL or ~/.config/agentvault/url; the token in
 ~/.config/agentvault/token (or the file named by AGENTVAULT_TOKEN_FILE).
@@ -43,6 +48,8 @@ def env(name):
     """AGENTVAULT_<name>, or the KEYS_<name> used before the rename."""
     return os.environ.get(f"AGENTVAULT_{name}") or os.environ.get(f"KEYS_{name}")
 MAX_SHOW = 100_000
+# Codes the vault adds to some refusals (see the README's API section).
+VAULT_CODES = {"token_overdue", "token_replaced", "token_rotated"}
 
 SETUP = f"""AgentVault isn't set up for this shell yet. The owner should, in their own terminal:
   1. Create a token in the vault's web interface (Tokens > preset "Claude / agents"; add the
@@ -83,6 +90,22 @@ def ssl_context():
     return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Python's urllib follows redirects and copies every header, the vault
+    token included, to wherever they point (GitHub's CI logs redirect to
+    Azure storage). Never follow one with the token; the caller sees the
+    3xx and its Location instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def open_vault(req, timeout):
+    """Opens a request to the vault: its certificate checked, no redirects."""
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ssl_context()))
+    return opener.open(req, timeout=timeout)
+
+
 def explain(status, body, url):
     try:
         msg = json.loads(body).get("error") or body
@@ -108,14 +131,15 @@ def request(method, path, body=None, headers=None, raw=False):
         h.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url + path, data=data, headers=h, method=method)
     try:
-        resp = urllib.request.urlopen(req, context=ssl_context(), timeout=120)
-        status, text, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
+        resp = open_vault(req, 120)
+        status, text, hdrs = resp.status, resp.read(), resp.headers
     except urllib.error.HTTPError as e:
-        status, text, ctype = e.code, e.read(), e.headers.get("Content-Type", "")
+        status, text, hdrs = e.code, e.read(), e.headers
     except (urllib.error.URLError, OSError) as e:
         die(f"Can't reach the vault at {url}: {getattr(e, 'reason', e)}\n  (Is this machine on the tailnet, and is the vault running?)")
+    ctype = hdrs.get("Content-Type", "")
     if raw:
-        return status, text, ctype
+        return status, text, ctype, hdrs
     if status >= 400:
         die(explain(status, text.decode("utf-8", "replace"), url))
     return json.loads(text or b"null")
@@ -124,7 +148,7 @@ def request(method, path, body=None, headers=None, raw=False):
 def cmd_check(_):
     url, _ = settings()
     try:
-        st = json.load(urllib.request.urlopen(url + "/v1/status", context=ssl_context(), timeout=15))
+        st = json.load(open_vault(urllib.request.Request(url + "/v1/status"), 15))
     except Exception as e:
         die(f"Can't reach the vault at {url}: {e}")
     if not st.get("initialized"):
@@ -169,15 +193,18 @@ def cmd_describe(args):
 
 
 def refused_by_vault(status, text):
-    """The vault's own refusals are exactly {"error": "<message>"}; provider
-    errors pass through untouched and look different."""
+    """The vault's own refusals are exactly {"error": "<message>"}, sometimes
+    with one of its own codes; provider errors pass through untouched and
+    look different."""
     if status < 400:
         return False
     try:
         j = json.loads(text)
     except ValueError:
         return False
-    return isinstance(j, dict) and list(j) == ["error"] and isinstance(j["error"], str)
+    if not isinstance(j, dict) or not isinstance(j.get("error"), str):
+        return False
+    return set(j) == {"error"} or (set(j) == {"error", "code"} and j["code"] in VAULT_CODES)
 
 
 def cmd_call(args):
@@ -212,9 +239,23 @@ def cmd_call(args):
         except ValueError:
             pass
     target = f"/v1/proxy/{urllib.parse.quote(name, safe='')}/{path.lstrip('/')}" + (f"?{query}" if query else "")
-    status, text, ctype = request(method, target, body=body, headers=headers, raw=True)
+    status, text, ctype, hdrs = request(method, target, body=body, headers=headers, raw=True)
     if refused_by_vault(status, text):
         die(explain(status, text.decode("utf-8", "replace"), settings()[0]))
+    location = hdrs.get("Location") if 300 <= status < 400 else None
+    if location and method == "GET" and urllib.parse.urlsplit(location).scheme == "https":
+        # A download link (GitHub's CI logs and artifacts, for example) is
+        # signed and needs no key: fetch it with no credentials at all.
+        print(f"HTTP {status}: following the download link to {urllib.parse.urlsplit(location).hostname} without credentials")
+        try:
+            resp = urllib.request.urlopen(urllib.request.Request(location), timeout=120)
+            status, text, ctype = resp.status, resp.read(), resp.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            status, text, ctype = e.code, e.read(), e.headers.get("Content-Type", "")
+        except (urllib.error.URLError, OSError) as e:
+            die(f"Couldn't fetch the download link: {getattr(e, 'reason', e)}")
+    elif location:
+        print(f"Location: {location}")
     print(f"HTTP {status}  {ctype}")
     shown = text[:MAX_SHOW].decode("utf-8", "replace")
     if "json" in ctype:
@@ -332,7 +373,7 @@ def cmd_setup(args):
 
     req = urllib.request.Request(url + "/v1/secrets", headers={"Authorization": f"Bearer {token}"})
     try:
-        n = len(json.load(urllib.request.urlopen(req, context=ssl_context(), timeout=30))["secrets"])
+        n = len(json.load(open_vault(req, 30))["secrets"])
     except urllib.error.HTTPError as e:
         die(explain(e.code, e.read().decode("utf-8", "replace"), url) + "\nNothing was saved.")
     except (urllib.error.URLError, OSError) as e:
@@ -369,7 +410,232 @@ def cmd_setup(args):
     print("Restart Claude Code to load it (in a session: exit, then run `claude --continue`).")
 
 
-COMMANDS = {"setup": cmd_setup, "mcp-headers": cmd_mcp_headers, "check": cmd_check, "list": cmd_list, "describe": cmd_describe, "call": cmd_call, "run": cmd_run}
+# ---------------------------------------------------------------- github-push
+#
+# git push needs a credential on this machine. Instead, recreate each commit
+# through GitHub's Git Data API via the vault's proxy (blobs, trees, commits),
+# check that GitHub computed the same commit ID, then fast-forward the branch.
+# The vault adds the key; nothing here ever holds it.
+
+MAX_BLOB = 7 * 1024 * 1024  # base64 of this fits under the vault's 10 MB request limit
+PLACEHOLDER = ".agentvault-push-placeholder"
+
+
+def _git(repo, *args, binary=False, check=True):
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True)
+    if check and r.returncode != 0:
+        die(f"git {' '.join(args)} failed: {r.stderr.decode('utf-8', 'replace').strip()}")
+    return r if not check else (r.stdout if binary else r.stdout.decode())
+
+
+def _git_ok(repo, *args):
+    return _git(repo, *args, check=False).returncode == 0
+
+
+def _github(key, method, path, body=None):
+    target = f"/v1/proxy/{urllib.parse.quote(key, safe='')}/{path.lstrip('/')}"
+    status, text, _, _ = request(method, target, body=body, headers={"Accept": "application/vnd.github+json"}, raw=True)
+    if refused_by_vault(status, text):
+        if status == 405:
+            die("The vault refused a write: this token's proxy allows GET requests only.\n"
+                "  The owner unticks \"Proxy: GET requests only\" on this token (vault web page > Tokens > Edit)\n"
+                "  for the push, and can tick it again afterwards. Don't look for another way round it.")
+        die(explain(status, text.decode("utf-8", "replace"), settings()[0]))
+    try:
+        data = json.loads(text) if text else None
+    except ValueError:
+        data = None
+    return status, data
+
+
+def _gh_ok(key, method, path, body=None, ok=(200, 201)):
+    status, data = _github(key, method, path, body)
+    if status not in ok:
+        msg = data.get("message") if isinstance(data, dict) else ""
+        hint = {401: " (the GitHub key was refused: it may be revoked or expired)",
+                403: " (the GitHub key lacks permission for this repository)",
+                404: " (no such repository, or the GitHub key can't see it)"}.get(status, "")
+        die(f"GitHub said {status} for {method} {path}: {msg}{hint}")
+    return data
+
+
+def _github_key(wanted):
+    rows = request("GET", "/v1/secrets")["secrets"]
+    if wanted:
+        if not any(r["name"] == wanted for r in rows):
+            die(f"This token can't use a key named {wanted}. Run `agentvault-cli list github`.")
+        return wanted
+    found = [r["name"] for r in rows if (r.get("provider_name") or "").lower().startswith("github") and r.get("proxy_ready")]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        die("This token can't use any GitHub key. The owner adds one to the vault, or allows it on this token.")
+    die("Several GitHub keys are available; choose one with --key: " + ", ".join(found))
+
+
+def _tree_entries(repo, commit):
+    out = []
+    for item in _git(repo, "ls-tree", "-r", "-z", commit, binary=True).split(b"\0"):
+        if not item:
+            continue
+        meta, path = item.split(b"\t", 1)
+        mode, typ, sha = meta.decode().split()
+        out.append({"path": path.decode("utf-8", "surrogateescape"), "mode": mode, "type": typ, "sha": sha})
+    return out
+
+
+def _commit_fields(repo, c):
+    raw = _git(repo, "cat-file", "commit", c)
+    head, _, message = raw.partition("\n\n")
+    sig, lines = None, head.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("gpgsig ") or line.startswith("gpgsig-sha256 "):
+            block = [line.split(" ", 1)[1]]
+            for cont in lines[i + 1:]:
+                if not cont.startswith(" "):
+                    break
+                block.append(cont[1:])
+            sig = "\n".join(block)
+        if line.startswith("encoding "):
+            die(f"Commit {c[:7]} uses a non-UTF-8 encoding, which GitHub's API can't reproduce. Use git push for this one.")
+    f = lambda x: _git(repo, "show", "-s", f"--format={x}", c).strip()
+    who = lambda p: {"name": f(f"%{p}n"), "email": f(f"%{p}e"), "date": f(f"%{p}I")}
+    body = {"message": message, "tree": _git(repo, "rev-parse", f"{c}^{{tree}}").strip(),
+            "parents": _git(repo, "rev-list", "--parents", "-n", "1", c).split()[1:], "author": who("a"), "committer": who("c")}
+    if sig:
+        body["signature"] = sig
+    return body
+
+
+def cmd_github_push(args):
+    repo, branch, key, dry, full = ".", None, None, False, None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--branch", "--key", "-C"):
+            if i + 1 >= len(args):
+                die(f"{a} needs a value")
+            v = args[i + 1]
+            if a == "--branch":
+                branch = v
+            elif a == "--key":
+                key = v
+            else:
+                repo = v
+            i += 2
+            continue
+        if a == "--dry-run":
+            dry = True
+        elif a.startswith("-") or full:
+            die("usage: agentvault-cli github-push OWNER/REPO [--branch B] [--key NAME] [-C DIR] [--dry-run]")
+        else:
+            full = a
+        i += 1
+    if not full or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full):
+        die("usage: agentvault-cli github-push OWNER/REPO [--branch B] [--key NAME] [-C DIR] [--dry-run]")
+    if not _git_ok(repo, "rev-parse", "--git-dir"):
+        die(f"{repo} isn't a git repository.")
+    branch = branch or _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if branch == "HEAD":
+        die("You're not on a branch (detached HEAD). Pass --branch NAME.")
+    local = _git(repo, "rev-parse", f"refs/heads/{branch}").strip()
+    key = _github_key(key)
+    R = f"/repos/{full}"
+    info = _gh_ok(key, "GET", R)
+    if not (info.get("permissions") or {}).get("push", True):
+        die(f"The GitHub key can see {full} but can't push to it.")
+
+    status, ref = _github(key, "GET", f"{R}/git/ref/heads/{branch}")
+    empty = status == 409
+    remote = ref["object"]["sha"] if status == 200 else None
+    if status not in (200, 404, 409):
+        die(f"GitHub said {status} reading {branch}: {(ref or {}).get('message', '')}")
+
+    base = None
+    if remote:
+        if remote == local:
+            print(f"GitHub's {branch} is already at {local[:7]}. Nothing to push.")
+            return
+        if not _git_ok(repo, "cat-file", "-e", f"{remote}^{{commit}}"):
+            die(f"GitHub's {branch} ({remote[:7]}) has commits this clone doesn't have. Get them first (git fetch / pull); nothing was pushed.")
+        if not _git_ok(repo, "merge-base", "--is-ancestor", remote, local):
+            die(f"Pushing would overwrite commits on GitHub's {branch} ({remote[:7]}): the histories have diverged. Nothing was pushed.")
+        base = remote
+    elif not empty:
+        d = info.get("default_branch")
+        st2, dref = _github(key, "GET", f"{R}/git/ref/heads/{d}") if d else (404, None)
+        tip = dref["object"]["sha"] if st2 == 200 else None
+        if tip and _git_ok(repo, "cat-file", "-e", f"{tip}^{{commit}}") and _git_ok(repo, "merge-base", "--is-ancestor", tip, local):
+            base = tip
+    commits = _git(repo, "rev-list", "--reverse", f"{base}..{local}" if base else local).split()
+
+    where = "an empty repository" if empty else (f"new branch {branch}" if not remote else f"{branch} at {remote[:7]}")
+    print(f"{full}: {where}; {len(commits)} commit(s) to send from {local[:7]}.")
+    if dry:
+        for c in commits:
+            print(f"  would send {c[:7]} {_git(repo, 'log', '-1', '--format=%s', c).strip()[:70]}")
+        return
+
+    placeholder = None
+    if empty:
+        # GitHub's Git Data API refuses an empty repository, so make a
+        # throwaway first commit; the branch is moved off it below.
+        made = _gh_ok(key, "PUT", f"{R}/contents/{PLACEHOLDER}",
+                      {"message": "Placeholder (replaced by agentvault-cli github-push)", "content": base64.b64encode(b"placeholder\n").decode()})
+        placeholder = made["commit"]["sha"]
+
+    sent_blobs = set()
+    for c in commits:
+        if not base and not empty and _github(key, "GET", f"{R}/git/commits/{c}")[0] == 200:
+            print(f"  {c[:7]} already on GitHub")
+            continue
+        fields = _commit_fields(repo, c)
+        have = set(sent_blobs)
+        for p in fields["parents"]:
+            have.update(e["sha"] for e in _tree_entries(repo, p) if e["type"] == "blob")
+        entries, n = _tree_entries(repo, c), 0
+        for e in entries:
+            if e["type"] != "blob" or e["sha"] in have:
+                continue
+            data = _git(repo, "cat-file", "blob", e["sha"], binary=True)
+            if len(data) > MAX_BLOB:
+                die(f"{e['path']} is {len(data) // 1048576} MB; the vault's proxy takes files up to 7 MB. Push this one with git push or Git LFS.")
+            b = _gh_ok(key, "POST", f"{R}/git/blobs", {"content": base64.b64encode(data).decode(), "encoding": "base64"})
+            if b["sha"] != e["sha"]:
+                die(f"GitHub stored {e['path']} differently ({b['sha'][:7]} instead of {e['sha'][:7]}). Nothing was pushed.")
+            have.add(e["sha"])
+            sent_blobs.add(e["sha"])
+            n += 1
+        t = _gh_ok(key, "POST", f"{R}/git/trees", {"tree": entries})
+        if t["sha"] != fields["tree"]:
+            die(f"GitHub built a different tree for {c[:7]}. Nothing was pushed.")
+        k = _gh_ok(key, "POST", f"{R}/git/commits", fields)
+        if k["sha"] != c:
+            die(f"GitHub recreated {c[:7]} as {k['sha'][:7]} (different author details, date or signature?). Nothing was pushed.")
+        print(f"  sent {c[:7]} ({n} new file version(s)) {fields['message'].splitlines()[0][:60] if fields['message'] else ''}")
+
+    if placeholder:
+        default = _gh_ok(key, "GET", R).get("default_branch") or branch
+        if default == branch:
+            _gh_ok(key, "PATCH", f"{R}/git/refs/heads/{branch}", {"sha": local, "force": True})
+        else:
+            _gh_ok(key, "POST", f"{R}/git/refs", {"ref": f"refs/heads/{branch}", "sha": local})
+            _gh_ok(key, "PATCH", R, {"default_branch": branch})
+            _gh_ok(key, "DELETE", f"{R}/git/refs/heads/{default}", ok=(204,))
+    elif remote:
+        _gh_ok(key, "PATCH", f"{R}/git/refs/heads/{branch}", {"sha": local, "force": False})
+    else:
+        _gh_ok(key, "POST", f"{R}/git/refs", {"ref": f"refs/heads/{branch}", "sha": local})
+
+    now = _gh_ok(key, "GET", f"{R}/git/ref/heads/{branch}")["object"]["sha"]
+    if now != local:
+        die(f"GitHub's {branch} is at {now[:7]}, not {local[:7]}. Check the repository.")
+    print(f"Done: GitHub's {branch} is now {local[:7]}, the same as this clone.")
+    if _git_ok(repo, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{branch}"):
+        _git(repo, "update-ref", f"refs/remotes/origin/{branch}", local, check=False)
+
+
+COMMANDS = {"setup": cmd_setup, "mcp-headers": cmd_mcp_headers, "check": cmd_check, "list": cmd_list, "describe": cmd_describe, "call": cmd_call, "run": cmd_run, "github-push": cmd_github_push}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

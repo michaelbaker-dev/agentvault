@@ -29,7 +29,8 @@ them. Call list_secrets to find a key, describe_secret to learn what it is for a
 proxy_request to call that provider's API: the server attaches the key on its side. Raw key values are never \
 available through this server, so don't ask the user to paste keys; use proxy_request instead. Prefer read-only \
 requests unless the user asked for a change, and treat high-risk keys (those that spend money or change \
-production systems) with extra care.";
+production systems) with extra care. To push git commits to GitHub, use the agentvault skill's \
+`agentvault-cli github-push`, which sends them through this vault; don't ask for SSH keys or raw keys.";
 
 fn rpc_result(id: &Value, result: Value) -> Response {
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
@@ -74,7 +75,7 @@ fn tools_for(p: &Principal) -> Vec<Value> {
         tools.push(json!({
             "name": "proxy_request",
             "title": "Call an API with a stored key",
-            "description": "Send an HTTP request to the provider a stored key belongs to (for example api.openai.com for an OpenAI key). The vault adds the key's authentication itself; do not include any credentials. `path` is relative to the provider's API base (see describe_secret), e.g. '/v1/models'. Returns status, content type and up to 100 KB of response body.",
+            "description": "Send an HTTP request to the provider a stored key belongs to (for example api.openai.com for an OpenAI key). The vault adds the key's authentication itself; do not include any credentials. `path` is relative to the provider's API base (see describe_secret), e.g. '/v1/models'. Returns status, content type and up to 100 KB of response body. A GET that the provider redirects to a download link (GitHub's CI logs, for example) is followed for you, without the key, to public servers only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -312,12 +313,30 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     };
     let mut redactor = proxy::Redactor::for_creds(&creds, &target.auth);
     redactor.extend(&stored.secrets());
+    let is_get = method == Method::GET;
+    let sent_to = url.clone();
     let (mut resp, upstream) = match proxy::send(&app.http, &target, &creds, method, url, headers, body).await {
         Ok(r) => r,
         Err(e) => return fail(e, ev),
     };
     drop((material, stored));
     let _ = app.db.secret_touch(meta.id);
+    // A redirect's target, unless it carries the key. A GET that lands on a
+    // download link (GitHub's CI logs, for example) is followed here with no
+    // credentials, to public servers only; otherwise the agent gets the link.
+    let mut location = proxy::redirect_location(resp.status().as_u16(), resp.headers(), &redactor);
+    let mut download = None;
+    let mut not_followed = None;
+    if is_get && let Some(loc) = location.clone() {
+        match proxy::fetch_download(&sent_to, &loc).await {
+            Ok(r) => {
+                download = r.url().host_str().map(str::to_string);
+                resp = r;
+                location = None;
+            }
+            Err(e) => not_followed = Some(e),
+        }
+    }
     let status = resp.status().as_u16();
     let content_type = resp
         .headers()
@@ -348,6 +367,16 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
         }
         Err(_) => format!("[binary body, {} bytes]", bytes.len()),
     };
-    let out = json!({ "status": status, "content_type": content_type, "truncated": truncated, "body": text });
+    let mut out = json!({ "status": status, "content_type": content_type, "truncated": truncated, "body": text });
+    if let Some(host) = download {
+        out["downloaded_from"] = json!(host);
+    }
+    if let Some(l) = location {
+        out["location"] = json!(l);
+        out["note"] = json!(match not_followed {
+            Some(why) => format!("A redirect the vault didn't follow: {why}."),
+            None => "A redirect. If this is a download link (a signed URL), fetch it directly with no credentials.".into(),
+        });
+    }
     (tool_text(out, status >= 400), Some(ev.upstream(upstream)))
 }

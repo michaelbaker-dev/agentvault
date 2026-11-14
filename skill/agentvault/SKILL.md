@@ -32,8 +32,28 @@ The owner keeps their API keys in a vault on their Tailscale network. You can us
 | `agentvault-cli describe NAME` | Shows what a key is for, its account, its risk, and `proxy_target` (the address `call` paths are relative to). |
 | `agentvault-cli call NAME PATH [-X METHOD] [-q QUERY] [-H 'K: V'] [-d JSON or @file]` | Calls the provider through the vault. Example: `agentvault-cli call OPENAI_API_KEY /v1/models` |
 | `agentvault-cli run NAME[=ENVVAR] ... -- COMMAND` | Runs a program with the key in its environment, with the value blanked out of its output. Needs a token with the read scope. Use it for running the user's own code or tests. |
+| `agentvault-cli github-push OWNER/REPO [--branch B] [-C DIR] [--dry-run]` | Pushes a local branch to GitHub through the vault. See "Pushing to GitHub" below. |
+
+Download links are handled for you: GitHub's CI logs (`/repos/OWNER/REPO/actions/jobs/ID/logs`), for example, redirect to a signed link that `proxy_request` and `agentvault-cli call` fetch without any key. Don't change CI workflows just to see their output.
 
 The proxy path is relative to the provider's API base. For example, GitHub's base is `https://api.github.com`, so `/user` calls `https://api.github.com/user`. Don't add any authentication header yourself.
+
+## Pushing to GitHub
+
+When the owner asks you to push commits to GitHub and this machine has no git credentials, use the helper:
+
+```sh
+agentvault-cli github-push OWNER/REPO --dry-run   # shows what would be sent
+agentvault-cli github-push OWNER/REPO             # sends it
+```
+
+- It sends the commits through GitHub's API via the vault's proxy, so it needs no SSH key, no deploy key and no read scope, and the GitHub key never leaves the vault. Don't ask for any of those, and don't use `git push` with a key fetched through `run`.
+- Each commit is recreated exactly (GitHub must compute the same commit ID) before the branch moves. It works on empty repositories and new branches.
+- It only fast-forwards. If GitHub has commits this clone lacks, or the histories diverged, it refuses and pushes nothing. Tell the owner; never force anything.
+- It needs a token whose proxy allows more than GET. If the vault refuses with "GET requests only", tell the owner: they untick that box on the token for the push and can tick it again afterwards.
+- Only push, create repositories or change repository settings when the owner asked for that specific repository. If Claude Code's permission check blocks a GitHub write, stop and tell the owner; don't look for another route around it.
+- For other GitHub changes (a release, a tag, a repository setting), use `agentvault-cli call` or `proxy_request` against GitHub's API, with the same care. A lightweight tag, for example: `agentvault-cli call KEY /repos/OWNER/REPO/git/refs -X POST -d '{"ref":"refs/tags/v0.1.0","sha":"<commit>"}'`.
+- Files over 7 MB can't go through the proxy; the command says so and stops.
 
 ## Writing code that needs a key
 

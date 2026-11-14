@@ -267,7 +267,8 @@ pub fn forward_request_headers(incoming: &HeaderMap, auth: &Auth) -> HeaderMap {
     let mut out = HeaderMap::new();
     for (k, v) in incoming {
         let name = k.as_str();
-        if HOP_BY_HOP.contains(&name) || STRIP_REQUEST.contains(&name) || name.starts_with("sec-") {
+        // x-agentvault-*: the vault's own headers (CSRF, actor label) stay here.
+        if HOP_BY_HOP.contains(&name) || STRIP_REQUEST.contains(&name) || name.starts_with("sec-") || name.starts_with("x-agentvault-") {
             continue;
         }
         if auth.header_names().contains(&name) {
@@ -295,6 +296,112 @@ pub fn response_headers(upstream: &reqwest::header::HeaderMap, redactor: &Redact
         }
     }
     out
+}
+
+/// A redirect's target for an agent to follow itself, unless it carries the
+/// key. Download links (GitHub's CI logs, for example) are signed URLs that
+/// need no key, so the agent fetches them directly with no credentials.
+pub fn redirect_location(status: u16, upstream: &reqwest::header::HeaderMap, redactor: &Redactor) -> Option<String> {
+    if !(300..400).contains(&status) {
+        return None;
+    }
+    let v = upstream.get(reqwest::header::LOCATION)?;
+    if redactor.contains(v.as_bytes()) {
+        return None;
+    }
+    v.to_str().ok().map(str::to_string)
+}
+
+/// Addresses the vault never fetches a download link from: its own machine,
+/// the tailnet (100.64.0.0/10, fd7a:115c:a1e0::/48), local networks and
+/// other special ranges. A provider's redirect must not reach your machines.
+pub fn private_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v) => {
+            let o = v.octets();
+            v.is_private()
+                || v.is_loopback()
+                || v.is_link_local()
+                || v.is_unspecified()
+                || v.is_broadcast()
+                || v.is_multicast()
+                || v.is_documentation()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // shared address space; Tailscale
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // benchmarking
+                || o[0] >= 240
+        }
+        IpAddr::V6(v) => {
+            if let Some(v4) = v.to_ipv4_mapped() {
+                return private_ip(IpAddr::V4(v4));
+            }
+            let s = v.segments();
+            v.is_loopback()
+                || v.is_unspecified()
+                || v.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique local, Tailscale's included
+                || (s[0] & 0xffc0) == 0xfe80 // link-local
+                || (s[0] == 0x64 && s[1] == 0xff9b) // NAT64 maps to IPv4 anywhere
+                || (s[0] == 0x2001 && s[1] == 0x0db8)
+        }
+    }
+}
+
+const MAX_DOWNLOAD_HOPS: usize = 3;
+
+/// Fetches a download link a provider redirected a GET to (GitHub's CI logs,
+/// for example): https only, public addresses only, with no key or other
+/// credentials, and the connection pinned to the checked address so DNS can't
+/// switch it to a private one in between.
+pub async fn fetch_download(from: &Url, location: &str) -> Result<reqwest::Response, String> {
+    let mut url = from.join(location).map_err(|_| "the redirect address is invalid".to_string())?;
+    for _ in 0..MAX_DOWNLOAD_HOPS {
+        if url.scheme() != "https" {
+            return Err("the download link isn't https, so the vault won't follow it".into());
+        }
+        let Some(url::Host::Domain(host)) = url.host().map(|h| h.to_owned()) else {
+            return Err("the download link has no host name, so the vault won't follow it".into());
+        };
+        let port = url.port_or_known_default().unwrap_or(443);
+        let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|_| format!("couldn't look up {host}"))?
+            .collect();
+        let Some(&addr) = addrs.first() else {
+            return Err(format!("couldn't look up {host}"));
+        };
+        if addrs.iter().any(|a| private_ip(a.ip())) {
+            return Err(format!(
+                "{host} is on a private network; the vault only follows download links to public servers"
+            ));
+        }
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(&host, addr)
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(180))
+            .user_agent(concat!("agentvault/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| format!("download failed: {e}"))?;
+        let resp = client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("download failed: {}", without_url(&e)))?;
+        if resp.status().is_redirection()
+            && let Some(next) = resp.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok())
+        {
+            url = url.join(next).map_err(|_| "the redirect address is invalid".to_string())?;
+            continue;
+        }
+        if compressed(resp.headers()) {
+            return Err("the download came compressed, which the vault can't check for the key".into());
+        }
+        return Ok(resp);
+    }
+    Err("the download link redirected too many times".into())
 }
 
 /// Sends the request. Returns the upstream response and the time to its headers.
@@ -540,6 +647,57 @@ fn lower_hex(enc: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn download_links_never_reach_private_addresses() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.101.102.103", // a tailnet address
+            "169.254.169.254",
+            "0.0.0.0",
+            "::1",
+            "fd7a:115c:a1e0::1", // Tailscale IPv6
+            "fe80::1",
+            "::ffff:192.168.1.1",
+            "64:ff9b::a00:1",
+        ] {
+            assert!(private_ip(ip.parse().unwrap()), "{ip} must be refused");
+        }
+        for ip in ["140.82.112.3", "20.60.40.4", "2606:4700::1111"] {
+            assert!(!private_ip(ip.parse().unwrap()), "{ip} is public");
+        }
+    }
+
+    #[tokio::test]
+    async fn download_links_are_refused_unless_https_public_and_named() {
+        let from = Url::parse("https://api.github.com/repos/o/r/actions/jobs/1/logs").unwrap();
+        for (loc, why) in [
+            ("http://example.com/log", "isn't https"),
+            ("https://127.0.0.1/log", "no host name"),
+            ("https://[::1]/log", "no host name"),
+            ("https://localhost/log", "private network"),
+        ] {
+            let e = fetch_download(&from, loc).await.unwrap_err();
+            assert!(e.contains(why), "{loc}: {e}");
+        }
+    }
+
+    #[test]
+    fn redirects_are_passed_on_without_the_key() {
+        let fake_key = format!("sk-{}", "q".repeat(16));
+        let red = Redactor::new(&[fake_key.as_str()]);
+        let mut h = reqwest::header::HeaderMap::new();
+        let signed = "https://results.blob.core.windows.net/logs/job.txt?sig=abc&se=2026";
+        h.insert("location", signed.parse().unwrap());
+        assert_eq!(redirect_location(302, &h, &red).as_deref(), Some(signed));
+        assert_eq!(redirect_location(200, &h, &red), None, "only for redirects");
+        h.insert("location", format!("https://x.example/cb?key={fake_key}").parse().unwrap());
+        assert_eq!(redirect_location(302, &h, &red), None, "never one that carries the key");
+        assert_eq!(redirect_location(302, &reqwest::header::HeaderMap::new(), &red), None);
+    }
+
+    #[test]
     fn review_hardening_headers_encodings_and_offsets() {
         // Partial replies and method overrides never reach the provider.
         let mut h = HeaderMap::new();
@@ -550,6 +708,7 @@ mod tests {
             "x-http-method",
             "x-method-override",
             "x-agentvault-actor",
+            "x-agentvault-csrf",
         ] {
             h.insert(HeaderName::from_static(n), HeaderValue::from_static("x"));
         }

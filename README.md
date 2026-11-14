@@ -30,7 +30,7 @@ A secrets vault for your Tailscale network, in one Rust binary. Store your API k
   - which machines it works from;
   - read-only requests through the proxy.
 - **Owner-only secrets:** passwords and wallet keys can be hidden from every token.
-- **Needs attention:** exposed, expired, rejected, overdue or incomplete keys, most urgent first.
+- **Needs attention:** exposed, expired, rejected, overdue or incomplete keys, most urgent first. Each key's card shows its own warnings too, with **OK** to accept them until something about the key changes, and **Restore** to bring them back.
 - **Dashboard:** usage per key and per machine, with latency.
 - **Tamper-evident audit log.**
 
@@ -186,6 +186,7 @@ agentvault-cli list [word]                           # keys this token may use; 
 agentvault-cli describe GITHUB_TOKEN                 # what it's for, risk, proxy address
 agentvault-cli call GITHUB_TOKEN /user               # call the provider through the vault
 agentvault-cli run OPENAI_API_KEY -- python app.py   # program gets the key; output has it blanked (needs read scope)
+agentvault-cli github-push OWNER/REPO               # push this clone's branch through the vault (no git credentials)
 ```
 
 ### With spandeck
@@ -226,6 +227,7 @@ It never receives the value.
 | POST | `/v1/tokens` `{name, scopes, secrets?, nodes?, proxy_get_only?}` | owner session |
 | PATCH | `/v1/tokens/ID` (same fields; takes effect on the token's next request) | owner session |
 | DELETE | `/v1/tokens/ID` (revoke) | owner session |
+| POST | `/v1/tokens/ID/remove`, `/v1/tokens/remove-revoked` (take revoked tokens off the list; an active token must be revoked first) | owner session |
 | POST | `/v1/secrets/NAME/rotate` `{}` (automatic) or `{value, fields?, extras?, skip_check?}` (by hand) | owner session |
 | GET | `/v1/rotations`, `/v1/attention`, `/v1/providers` | owner session |
 | POST | `/v1/attention/dismiss` `{secret}` (OK: hide its current items until something changes), `/v1/attention/restore` `{secret}` | owner session |
@@ -288,7 +290,7 @@ Edit `/etc/agentvault/config.toml` (every option is documented in [config.exampl
 | Web session | Owner's devices only. The passphrase is required. The cookie is `HttpOnly; Secure; SameSite=Strict`, bound to the device's stable Tailscale node ID, and every call also needs a CSRF header. Sessions expire after 15 min idle or 12 h total. |
 | Step-up | Using any key through the proxy (REST or MCP), revealing or copying a value, adding a key or changing its value, renaming, importing (preview and commit), creating or editing a token, deleting, and changing a proxy target all need the passphrase entered in the last 5 minutes when done from the web session. A cookie stolen by an agent running as you can list secrets, but can't take them, use them, or test guesses against them. Copied values are cleared from the clipboard after 45 seconds. |
 | Encryption | Passphrase → Argon2id (64 MiB) → key-encryption key → root key → a fresh XChaCha20-Poly1305 data key per value version. Each ciphertext is bound to its secret id and version. The root key lives only in memory. **Lock** wipes it. |
-| Proxy | Only the owner can change where a key is sent, and editing a key's name or notes never changes its detected provider. Paths can't escape the provider's base URL. Only GET/POST/PUT/PATCH/DELETE are forwarded (TRACE would echo the key), and method-override and `Range` headers are stripped. The key is redacted from response bodies and headers, raw, base64-encoded (at any alignment) or URL-encoded; compressed replies are refused because they couldn't be checked. Tokens can be limited to GET requests, which stops POST/PUT/PATCH/DELETE; a few APIs do change things on GET, so GET-only is a strong limit, not a guarantee. Redirects aren't followed. |
+| Proxy | Only the owner can change where a key is sent, and editing a key's name or notes never changes its detected provider. Paths can't escape the provider's base URL. Only GET/POST/PUT/PATCH/DELETE are forwarded (TRACE would echo the key), and method-override and `Range` headers are stripped. The key is redacted from response bodies and headers, raw, base64-encoded (at any alignment) or URL-encoded; compressed replies are refused because they couldn't be checked. Tokens can be limited to GET requests, which stops POST/PUT/PATCH/DELETE; a few APIs do change things on GET, so GET-only is a strong limit, not a guarantee. Redirects are never followed with the key, and the vault's own headers (`x-agentvault-*`) are never forwarded. Through MCP, a GET redirected to a download link (GitHub's CI logs, for example) is fetched with no credentials, only over HTTPS, and only from public addresses: never the tailnet, local networks or the vault's machine, with the connection pinned to the checked address. |
 | Process | Not dumpable (no core dumps, and same-user processes can't read its memory). Runs as its own system user under a strict systemd sandbox. |
 | Brute force | 5 passphrase attempts per device per 15 minutes, counted before the check runs, so parallel guesses don't help. Argon2 attempts are capped at 2 concurrent. |
 | Owner-only | Secrets marked "only me" (passwords and wallet keys start that way) don't exist as far as tokens are concerned: not listed, not readable, not usable through the proxy or MCP, and not named in duplicate warnings. |

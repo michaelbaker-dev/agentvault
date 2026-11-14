@@ -2,6 +2,21 @@
 
 ## 0.1.0 (unreleased)
 
+### Helper
+
+- `agentvault-cli github-push OWNER/REPO` pushes a branch to GitHub through the vault's proxy: no SSH key or git credentials on the machine, and the key never leaves the vault. Commits are recreated exactly and checked; fast-forward only; works on empty repositories. The skill and the MCP server's instructions point agents to it.
+
+### Fixes
+
+- The helper followed redirects with the vault token attached, so a GitHub CI log request sent it to the log's storage server. It now never follows a redirect with the token, and fetches download links with no credentials.
+- MCP `proxy_request` follows a GET's redirect to a download link itself, with no key, over HTTPS to public addresses only; any other redirect returns its address (unless it contains the key).
+- The proxy no longer forwards the vault's own `x-agentvault-*` headers to providers.
+
+### Web page
+
+- Each key's card shows its own warnings (exposed, rejected, overdue and so on) with **OK** and **Restore**, not only the Needs attention list.
+- Revoked tokens can be taken off the Tokens list, one at a time or all at once. Active tokens must be revoked first; every removal is logged.
+
 ### spandeck integration
 
 - Stations connect with the owner's approval: `POST /v1/token-requests`, an approval page that opens as a pop-up and closes itself, and a one-time collection from the machine that asked. Issued tokens are list + proxy only, read-only by default, pinned to the machine's stable Tailscale ID and blind to owner-only keys; approving again replaces a station's token.

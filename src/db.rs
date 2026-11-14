@@ -1080,6 +1080,15 @@ impl Db {
         Ok(())
     }
 
+    /// Removes revoked tokens from the list: one (`Some(id)`) or all. Active
+    /// tokens are never removed; revoke them first. Returns how many went.
+    pub fn token_remove_revoked(&self, id: Option<i64>) -> DbResult<usize> {
+        self.c().execute(
+            "DELETE FROM tokens WHERE revoked_at IS NOT NULL AND (?1 IS NULL OR id = ?1)",
+            params![id],
+        )
+    }
+
     pub fn token_revoke(&self, id: i64) -> DbResult<bool> {
         let n = self.c().execute(
             "UPDATE tokens SET revoked_at = ?2 WHERE id = ?1 AND revoked_at IS NULL",

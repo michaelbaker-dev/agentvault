@@ -352,3 +352,9 @@ td .small div { min-width: 160px; }
 .lead { margin-bottom: 14px; }
 .panel.approve.focus { border-color: var(--accent); }
 .panel.approve p.small { margin-bottom: 8px; }
+.card-attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; margin: 6px 0 8px; border-radius: 8px; background: var(--surface-2); border-left: 3px solid var(--border); }
+.card-attn.crit { border-left-color: var(--critical); }
+.card-attn.warn { border-left-color: var(--warning); }
+.card-attn .att-reason { flex: 1 1 240px; color: var(--ink-2); font-size: 13.5px; }
+.card-attn.okd .att-reason { color: var(--muted); }
+.card-attn .btn { padding: 4px 10px; }

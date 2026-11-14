@@ -483,8 +483,47 @@
     return bits.join(" · ");
   }
 
+  // OK hides a key's current warnings until something about it changes;
+  // Restore brings them back. Same calls as the Needs attention panel.
+  async function attentionAction(name, ok) {
+    try {
+      await api("POST", ok ? "/v1/attention/dismiss" : "/v1/attention/restore", { secret: name });
+      toast(ok ? `OK'd ${name}. It comes back if anything about it changes.` : `Restored the warnings for ${name}.`);
+      await loadSecrets();
+      if (S.attnBox) loadAttention(S.attnBox);
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  function attentionLine(m) {
+    const a = S.attention || { items: [], dismissed: [] };
+    const open = a.items.filter((i) => i.secret === m.name);
+    const okd = (a.dismissed || []).filter((i) => i.secret === m.name);
+    if (open.length) {
+      const level = open.some((i) => i.level === "critical") ? "crit" : open.some((i) => i.level === "warning") ? "warn" : "info";
+      return h(
+        "div",
+        { class: "card-attn " + level },
+        h("span", { class: "status " + level }, h("span", { class: "dot", "aria-hidden": "true" })),
+        h("span", { class: "att-reason", text: open.map((i) => i.reason).join(" · ") }),
+        h("button", { class: "btn", title: "Accept this for now; it comes back if anything about the key changes", onclick: () => attentionAction(m.name, true), text: "OK" }),
+      );
+    }
+    if (okd.length) {
+      return h(
+        "div",
+        { class: "card-attn okd" },
+        h("span", { class: "att-reason", text: "OK'd: " + okd.map((i) => i.reason).join(" · ") }),
+        h("button", { class: "btn ghost", onclick: () => attentionAction(m.name, false), text: "Restore" }),
+      );
+    }
+    return null;
+  }
+
   function secretCard(m) {
     const pending = m.describe_status === "pending";
+    const okdExposed = ((S.attention && S.attention.dismissed) || []).some((i) => i.secret === m.name && i.kind === "exposed");
     const valueBox = h("div", { class: "value", hidden: true });
     const docs = safeUrl(m.docs_url);
     const rotate = safeUrl(m.rotate_url);
@@ -502,13 +541,13 @@
         verifyBadge(m.facts && m.facts.verification),
         KIND[m.kind] ? h("span", { class: "chip", text: KIND[m.kind] }) : null,
         m.owner_only ? h("span", { class: "chip lock", title: "No token can see or use this, whatever its scopes", text: "Only you" }) : null,
-        m.exposed ? h("span", { class: "badge crit", title: m.exposed }, h("span", { class: "dot", "aria-hidden": "true" }), "Exposed") : null,
+        m.exposed ? h("span", { class: "badge " + (okdExposed ? "info" : "crit"), title: m.exposed }, h("span", { class: "dot", "aria-hidden": "true" }), okdExposed ? "Exposed (OK'd)" : "Exposed") : null,
         m.expires_at ? h("span", { class: "badge " + (m.expires_at < Date.now() ? "crit" : m.expires_at - Date.now() < 30 * 86400000 ? "warn" : "info"), title: when(m.expires_at) }, h("span", { class: "dot", "aria-hidden": "true" }), m.expires_at < Date.now() ? "Expired" : "Expires " + new Date(m.expires_at).toLocaleDateString()) : null,
         (m.tags || []).map((t) => h("span", { class: "tag", text: t })),
       ),
       h("p", { class: "desc" + (pending ? " pending" : ""), text: pending ? "Working out what this is…" : m.description || "No description yet." }),
       !pending && m.risk_reason ? h("p", { class: "meta", text: "Why this risk level: " + m.risk_reason }) : null,
-      m.exposed ? h("p", { class: "meta warn-text" }, h("span", { class: "status crit" }, h("span", { class: "dot", "aria-hidden": "true" }), m.exposed)) : null,
+      attentionLine(m),
       m.notes ? h("p", { class: "notes" }, h("span", { class: "label", text: "Your notes: " }), m.notes) : null,
       facts.length ? h("dl", { class: "facts" }, facts.map(([k, v]) => h("div", {}, h("dt", { text: k }), h("dd", { text: v })))) : null,
       h(
@@ -625,6 +664,7 @@
     S.listEl = list;
     const unlockNote = autoUnlockNote();
     const attn = h("div", {});
+    S.attnBox = attn;
     // The attention panel needs the list loaded to offer Rotate and Edit.
     loadSecrets()
       .catch((e) => list.replaceChildren(errBox(e)))
@@ -653,6 +693,9 @@
     try {
       const r = await api("GET", "/v1/attention");
       if (!box.isConnected && box.parentNode) return;
+      // The cards show their own warnings (with OK) from the same list.
+      S.attention = r;
+      drawSecrets();
       const byName = (n) => S.secrets.find((x) => x.name === n);
       // One line per secret, with every reason and its most urgent level.
       const rank = { critical: 0, warning: 1, info: 2 };
@@ -1958,7 +2001,28 @@
   async function loadTokens(list) {
     try {
       const r = await api("GET", "/v1/tokens");
+      const revoked = r.tokens.filter((t) => t.revoked_at).length;
+      const clear = revoked
+        ? h(
+            "p",
+            { class: "row-actions" },
+            h("button", {
+              class: "btn",
+              text: `Remove ${revoked === 1 ? "the revoked token" : `all ${revoked} revoked tokens`}`,
+              onclick: async () => {
+                try {
+                  const res = await api("POST", "/v1/tokens/remove-revoked", {});
+                  toast(`Removed ${res.removed} revoked token${res.removed === 1 ? "" : "s"}.`);
+                  loadTokens(list);
+                } catch (e) {
+                  toast(e.message, true);
+                }
+              },
+            }),
+          )
+        : null;
       list.replaceChildren(
+        clear || "",
         table(
           [["Name"], ["Scopes"], ["Secrets"], ["Machines"], ["Rotation"], ["Last used"], [""]],
           r.tokens.map((t) => [
@@ -1971,7 +2035,20 @@
               : h("span", { class: "muted", text: "never expires" }),
             t.revoked_at ? h("span", { class: "muted", text: "revoked " + ago(t.revoked_at) }) : h("span", { title: when(t.last_used_at), text: ago(t.last_used_at) }),
             t.revoked_at
-              ? ""
+              ? h("button", {
+                  class: "btn",
+                  title: "Take this revoked token off the list",
+                  onclick: async () => {
+                    try {
+                      await api("POST", `/v1/tokens/${t.id}/remove`, {});
+                      toast(`Removed ${t.name}.`);
+                      loadTokens(list);
+                    } catch (e) {
+                      toast(e.message, true);
+                    }
+                  },
+                  text: "Remove",
+                })
               : h(
                   "div",
                   { class: "row-actions" },

@@ -3141,3 +3141,96 @@ async fn exposure_reports_land_on_attention_without_revealing_a_match() {
             .any(|i| i["kind"] == "reported" && i["secret"] == "OPENAI_API_KEY")
     );
 }
+
+#[tokio::test]
+async fn only_revoked_tokens_can_be_removed_from_the_list() {
+    let app = test_app();
+    let s = setup(&app).await;
+    let mut ids = vec![];
+    for name in ["a", "b", "c"] {
+        let r = call(
+            &app,
+            LAPTOP,
+            "POST",
+            "/v1/tokens",
+            &s.hdrs(),
+            Some(json!({ "name": name, "scopes": ["list"] })),
+        )
+        .await;
+        ids.push(r.body["id"].as_i64().unwrap());
+    }
+    let listed = |r: &Resp| {
+        r.body["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // An active token can't be removed, only revoked.
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/tokens/{}/remove", ids[0]),
+        &s.hdrs(),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+
+    for id in &ids[..2] {
+        assert_eq!(
+            call(&app, LAPTOP, "DELETE", &format!("/v1/tokens/{id}"), &s.hdrs(), None)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+    // Remove one revoked token.
+    let r = call(
+        &app,
+        LAPTOP,
+        "POST",
+        &format!("/v1/tokens/{}/remove", ids[0]),
+        &s.hdrs(),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let r = call(&app, LAPTOP, "GET", "/v1/tokens", &s.hdrs(), None).await;
+    let mut names = listed(&r);
+    names.sort();
+    assert_eq!(names, ["b", "c"]);
+
+    // Remove all revoked: b goes, the active c stays.
+    let r = call(&app, LAPTOP, "POST", "/v1/tokens/remove-revoked", &s.hdrs(), Some(json!({}))).await;
+    assert_eq!(r.body["removed"], 1);
+    let r = call(&app, LAPTOP, "GET", "/v1/tokens", &s.hdrs(), None).await;
+    assert_eq!(listed(&r), ["c"]);
+
+    // Owner only, and logged.
+    let tok = call(
+        &app,
+        LAPTOP,
+        "POST",
+        "/v1/tokens",
+        &s.hdrs(),
+        Some(json!({ "name": "agent", "scopes": ["list", "proxy", "read"] })),
+    )
+    .await;
+    let bearer = format!("Bearer {}", tok.body["token"].as_str().unwrap());
+    let r = call(
+        &app,
+        SPARK,
+        "POST",
+        "/v1/tokens/remove-revoked",
+        &[("authorization", bearer.as_str())],
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let ev = call(&app, LAPTOP, "GET", "/v1/events?limit=50", &s.hdrs(), None).await;
+    assert!(ev.body.to_string().contains("token.remove"));
+}

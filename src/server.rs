@@ -60,6 +60,8 @@ pub fn router(app: AppRef) -> Router {
         .route("/v1/import/commit", post(crate::import_api::commit))
         .route("/v1/tokens", get(list_tokens).post(create_token))
         .route("/v1/tokens/{id}", delete(revoke_token).patch(update_token))
+        .route("/v1/tokens/{id}/remove", post(remove_token))
+        .route("/v1/tokens/remove-revoked", post(remove_revoked_tokens))
         .route("/v1/tokens/self", get(crate::stations::token_self))
         .route("/v1/tokens/self/rotate", post(crate::stations::rotate_self))
         .route("/v1/tokens/self/rotation", axum::routing::put(crate::stations::set_rotation))
@@ -1508,6 +1510,36 @@ async fn revoke_token(
     Ok(with_event(
         Json(json!({ "revoked": id })),
         EventInfo::new("token.revoke", "owner (web)").detail(format!("token #{id}")),
+    ))
+}
+
+/// Takes a revoked token off the list. Active tokens must be revoked first.
+async fn remove_token(
+    State(app): State<AppRef>,
+    Extension(caller): Extension<Caller>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult {
+    owner(&app, &headers, &caller)?;
+    if app.db.token_remove_revoked(Some(id))? == 0 {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "only a revoked token can be removed; revoke it first",
+        ));
+    }
+    Ok(with_event(
+        Json(json!({ "removed": id })),
+        EventInfo::new("token.remove", "owner (web)").detail(format!("token #{id}")),
+    ))
+}
+
+/// Takes every revoked token off the list.
+async fn remove_revoked_tokens(State(app): State<AppRef>, Extension(caller): Extension<Caller>, headers: HeaderMap) -> ApiResult {
+    owner(&app, &headers, &caller)?;
+    let n = app.db.token_remove_revoked(None)?;
+    Ok(with_event(
+        Json(json!({ "removed": n })),
+        EventInfo::new("token.remove", "owner (web)").detail(format!("{n} revoked token(s)")),
     ))
 }
 
