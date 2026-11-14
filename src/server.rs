@@ -1174,8 +1174,8 @@ fn claude_state(app: &AppRef) -> ApiResult<(&'static str, Option<String>)> {
         Some(m) if m.provider.as_deref() != Some("anthropic") && m.provider_hint.as_deref() != Some("anthropic") => (
             "unrecognised",
             Some(format!(
-                "{n} isn't recognised as an Anthropic API key (they usually start with sk-ant-api03-). If it is one, \
-                 open it with Edit and set its type to Anthropic API key"
+                "{n} isn't recognised as an Anthropic API key. If it is one, open it with Edit, then Details, \
+                 and set Service to Anthropic API key"
             )),
         ),
         Some(_) => ("ready", None),

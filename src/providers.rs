@@ -177,7 +177,8 @@ pub static PROVIDERS: &[Provider] = &[
     Provider {
         id: "anthropic",
         name: "Anthropic (Claude) API key",
-        patterns: &[r"^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$"],
+        // sk-ant-api03- (Console keys, 108 characters) and sk-ant-usr- (106).
+        patterns: &[r"^sk-ant-api\d\d-[A-Za-z0-9_\-]{20,}$", r"^sk-ant-usr\d*-[A-Za-z0-9_\-]{20,}$"],
         summary: "Calls the Claude API (Messages, Batches, Files, Models). Usage is billed to the key's workspace.",
         risk: "high",
         risk_reason: "Every request spends money on the owning account.",
@@ -677,6 +678,13 @@ pub static PROVIDERS: &[Provider] = &[
         ],
         api_base: Some("https://generativelanguage.googleapis.com"),
         api_auth: "header:x-goog-api-key",
+        // Listing Gemini models: free and read-only. A key that's real but not
+        // allowed to use Gemini (restricted to Maps, say) comes back restricted.
+        verify: Some(Verify {
+            url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+            auth: "header:x-goog-api-key",
+            ..VERIFY
+        }),
         rotation: Rotation::Auto("google-apikey"),
         rotate_days: Some(90),
         parent_provider: Some("google-service-account"),

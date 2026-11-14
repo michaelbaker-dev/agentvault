@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Anthropic keys starting `sk-ant-usr-` (106 characters) are recognised as Anthropic API keys, alongside `sk-ant-api03-`.
+- Google API keys get a provider check: listing Gemini models (free, read-only). A key Google doesn't know shows as rejected; one that's real but not allowed to use Gemini (restricted in Google Cloud, or the API isn't enabled) shows as restricted. Google's "API key not valid" answer (HTTP 400) now counts as rejected for any provider.
+- The key form's Details section names Service first, and Settings says where to find it.
 - **Describe … keys with Claude** in Settings: Claude describes every key that still has a built-in description, such as keys added before your Anthropic key was in the vault (`POST /v1/describe-all`).
 - **Weekly provider checks:** each key is checked with its provider again once a week (three a minute at most), so a key that was revoked, expired or ran out of credit shows under Needs attention on its own. A changed result gets a fresh description; the check doesn't count as a use of the key.
 - Settings no longer says Claude is on when the key named for it isn't an Anthropic API key (for example one cut short when pasted); it says why, and the Secrets page does too. The describer checks the key's value itself, so a key pasted again works at once.

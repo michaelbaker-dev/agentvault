@@ -47,6 +47,7 @@ pub struct Endpoints {
     pub github: String,
     pub slack: String,
     pub anthropic: String,
+    pub gemini: String,
 }
 
 impl Default for Endpoints {
@@ -62,6 +63,7 @@ impl Default for Endpoints {
             github: "https://api.github.com".into(),
             slack: "https://slack.com/api".into(),
             anthropic: "https://api.anthropic.com/v1".into(),
+            gemini: "https://generativelanguage.googleapis.com".into(),
         }
     }
 }
@@ -77,6 +79,7 @@ impl Endpoints {
             (&d.github, &self.github),
             (&d.slack, &self.slack),
             (&d.anthropic, &self.anthropic),
+            (&d.gemini, &self.gemini),
         ];
         for (real, mine) in pairs {
             if real != mine

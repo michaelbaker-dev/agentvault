@@ -251,6 +251,9 @@ fn template(p: Option<&Provider>, facts: &Value, why: &str) -> Description {
                 }
             }
             Some("rejected") => text.push_str(" The provider rejected this key: it may be revoked or mistyped."),
+            Some("restricted") if p.id == "google" => {
+                text.push_str(" Google accepted this key, but it isn't allowed to use the Gemini API (restricted in Google Cloud, or the API isn't enabled).")
+            }
             Some("restricted") => {
                 text.push_str(" The provider accepted this key; it has limited permissions, so it can't read its own account details.")
             }
@@ -359,6 +362,8 @@ pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::
     let mut status = match code {
         200..=299 => "valid",
         401 | 403 => "rejected",
+        // Google answers 400 for a key it doesn't know.
+        400 if reason.as_deref().is_some_and(key_not_valid) => "rejected",
         _ => "error",
     };
     if status == "valid" && v.ok_pointer.is_some_and(|p| body.pointer(p) != Some(&Value::Bool(true))) {
@@ -421,6 +426,13 @@ pub async fn verify_with_provider(http: &reqwest::Client, v: &Verify, url: url::
 
 /// Whether a provider's refusal just means the key can't read its own
 /// account details (a deliberately restricted key), not that it's bad.
+fn key_not_valid(reason: &str) -> bool {
+    let r = reason.to_lowercase();
+    ["api key not valid", "api_key_invalid", "api key expired"]
+        .iter()
+        .any(|p| r.contains(p))
+}
+
 fn only_lacks_permission(reason: &str) -> bool {
     let r = reason.to_lowercase();
     [
@@ -430,6 +442,11 @@ fn only_lacks_permission(reason: &str) -> bool {
         "insufficient scope",
         "insufficient_scope",
         "not have the required scope",
+        // Google: a real key that this API, client or project doesn't allow.
+        "are blocked",
+        "has not been used in project",
+        "api_key_service_blocked",
+        "service_disabled",
     ]
     .iter()
     .any(|p| r.contains(p))

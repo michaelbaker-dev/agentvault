@@ -1279,6 +1279,25 @@ mod fake {
             }
             // Anthropic
             ("GET", ["an", "models"]) => ok(json!({ "data": [] })),
+            // Gemini: a key ending in "zz" is unknown to Google, one ending in
+            // "bl" is blocked from this API, anything else works.
+            ("GET", ["gem", "v1beta", "models"]) => {
+                let k = h.get("x-goog-api-key").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                if k.ends_with("bl") {
+                    err(
+                        StatusCode::FORBIDDEN,
+                        json!({ "error": { "code": 403, "status": "PERMISSION_DENIED",
+                            "message": "Requests to this API generativelanguage.googleapis.com method google.ai.generativelanguage.v1beta.ModelService.ListModels are blocked." } }),
+                    )
+                } else if k.ends_with("zz") {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": { "code": 400, "status": "INVALID_ARGUMENT", "message": "API key not valid. Please pass a valid API key." } }),
+                    )
+                } else {
+                    ok(json!({ "models": [{ "name": "models/gemini-2.5-flash" }] }))
+                }
+            }
             ("POST", ["an", "messages"]) => ok(json!({
                 "stop_reason": "end_turn",
                 "content": [{ "type": "text", "text": json!({
@@ -1320,6 +1339,7 @@ mod fake {
             github: format!("{base}/gh"),
             slack: format!("{base}/slack"),
             anthropic: format!("{base}/an"),
+            gemini: format!("{base}/gem"),
         };
         (ep, state)
     }
@@ -3284,7 +3304,10 @@ async fn settings_say_why_claude_is_off_and_describe_all_catches_up_older_keys()
     let d = describer(&app, &s).await;
     assert_eq!(d["claude_state"], "unrecognised");
     assert_eq!(d["claude_ready"], false);
-    assert!(d["claude_problem"].as_str().unwrap().contains("set its type"), "{d}");
+    assert!(
+        d["claude_problem"].as_str().unwrap().contains("set Service to Anthropic API key"),
+        "{d}"
+    );
     let r = call(&app, LAPTOP, "POST", "/v1/describe-all", &s.hdrs(), Some(json!({}))).await;
     assert_eq!(r.status, StatusCode::CONFLICT, "{:?}", r.body);
     assert!(
@@ -3414,4 +3437,40 @@ async fn an_anthropic_key_in_a_format_the_vault_doesnt_know_works_once_the_owner
     assert_eq!(m["provider"], "anthropic", "{m}");
     assert_eq!(m["describe_status"], "described by Claude", "{m}");
     assert_eq!(describer(&app, &s).await["claude_state"], "ready");
+}
+
+#[tokio::test]
+async fn google_keys_are_checked_against_gemini_and_sk_ant_usr_keys_are_anthropic() {
+    let (ep, _f) = fake::start().await;
+    let base = test_app_with(ep);
+    let mut cfg = base.cfg.clone();
+    cfg.describe.verify_with_provider = true;
+    let app = Arc::new(App {
+        cfg,
+        endpoints: base.endpoints.clone(),
+        ..clone_app(&base)
+    });
+    let s = setup(&app).await;
+    for (name, tail, want) in [
+        ("G_OK", "ok", "valid"),
+        ("G_BLOCKED", "bl", "restricted"),
+        ("G_BAD", "zz", "rejected"),
+    ] {
+        let value = format!("AIza{}{tail}", "x".repeat(33));
+        let r = call(
+            &app,
+            LAPTOP,
+            "POST",
+            "/v1/secrets",
+            &s.hdrs(),
+            Some(json!({ "name": name, "value": value, "verify": true })),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+        let m = wait_described(&app, &s, name).await;
+        assert_eq!(m["provider"], "google", "{m}");
+        assert_eq!(m["facts"]["verification"]["status"], want, "{name}: {m}");
+    }
+    let usr = format!("sk-ant-usr-{}", "u".repeat(95));
+    assert_eq!(crate::providers::detect(&usr, "").map(|p| p.id), Some("anthropic"));
 }

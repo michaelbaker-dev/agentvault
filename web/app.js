@@ -940,7 +940,7 @@
       h(
         "details",
         { class: "more", open: m && (m.owner_only || m.parent || Object.keys(m.fields || {}).length) ? true : null },
-        h("summary", { text: "Details: who can use it, linked parts, rotation" }),
+        h("summary", { text: "Details: service, who can use it, linked parts, rotation" }),
         h("label", { class: "check" }, ownerOnly, h("span", {}, h("b", { text: "Only me" }), " — ", h("span", { class: "hint", text: "No token can list, read or use this through the proxy, whatever its scopes. Good for passwords and wallet keys." }))),
         field("f-provider", "Service", provider, "Set this if the vault guessed wrong."),
         field("f-kind", "Kind", kind),
