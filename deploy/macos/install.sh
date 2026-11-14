@@ -78,12 +78,23 @@ PY
 mkdir -p "$APP/bin" "$APP/data" "$APP/tls" "$LOGS" "$HOME/Library/LaunchAgents"
 chmod 700 "$APP" "$APP/data" "$APP/tls"
 
-# ---- upgrading: only the program that stored the Keychain passphrase can
-# remove it, so the old one does that now; you sign in once afterwards and
-# the new one stores it again.
+# ---- upgrading. The Keychain trusts the program by its code signature. A
+# release signed with the project's Developer ID keeps the same signature
+# requirement from version to version, so the stored passphrase stays readable
+# and nothing needs doing. Any other build (from source, or ad-hoc signed) is
+# trusted only as that exact file: the old program removes the passphrase now,
+# and you sign in once afterwards so the new one stores it again.
+signed_as() { codesign -d -r- "$1" 2>/dev/null | sed -n 's/^designated => //p'; }
 REARM=no
 if [ -x "$APP/bin/agentvault" ] && [ -f "$CONF" ] && ! cmp -s "$APP/bin/agentvault" "$BIN"; then
-  case $(in_session "$APP/bin/agentvault" auto-unlock -c "$CONF" --off) in *Removed*) REARM=yes ;; esac
+  OLD_REQ=$(signed_as "$APP/bin/agentvault"); NEW_REQ=$(signed_as "$BIN")
+  case $NEW_REQ in
+    *"anchor apple generic"*) [ "$OLD_REQ" = "$NEW_REQ" ] && KEEPS_TRUST=yes || KEEPS_TRUST=no ;;
+    *) KEEPS_TRUST=no ;;
+  esac
+  if [ "$KEEPS_TRUST" = no ]; then
+    case $(in_session "$APP/bin/agentvault" auto-unlock -c "$CONF" --off) in *Removed*) REARM=yes ;; esac
+  fi
 fi
 
 # ---- config (kept on upgrade)

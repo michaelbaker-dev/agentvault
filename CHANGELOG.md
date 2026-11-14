@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The Mac download can be signed with a Developer ID and notarized by Apple (see docs/releasing.md): it then opens even when downloaded in a browser, and automatic unlock survives upgrades. Without the signing secrets it stays ad-hoc signed, as before.
+- The Mac installer keeps the stored passphrase on upgrade when the old and new program carry the same Developer ID signature, and only asks for a sign-in after upgrades between other builds.
+
 ## 0.1.1 (2026-11-14)
 
 - Downloads for Macs with Apple silicon (`agentvault-aarch64-macos.tar.gz`), built by GitHub with signed build provenance like the Linux ones. Unpack it and run `./install.sh`; see "On a Mac" in the README.

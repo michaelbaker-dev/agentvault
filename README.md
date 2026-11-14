@@ -400,7 +400,7 @@ gitleaks dir .                              # no secrets in the tree
 agentvault audit-verify -c /etc/agentvault/config.toml  # on the vault machine: is the hash chain intact?
 ```
 
-CI runs all of these on every push. Pushing a tag such as `v0.1.0` builds the release downloads. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved, [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what's next.
+CI runs all of these on every push. Pushing a tag such as `v0.1.0` builds the release downloads; see [docs/releasing.md](docs/releasing.md). See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved, [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what's next.
 
 ## License
 
