@@ -1426,7 +1426,10 @@ async fn proxy_request(
     app.db.secret_touch(meta.id)?;
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let resp_headers = proxy::response_headers(resp.headers(), &redactor);
-    let mut out = Response::new(Body::from_stream(proxy::redact_stream(resp.bytes_stream(), redactor)));
+    // An event stream stays open between events, so only other replies are
+    // cut off when the provider goes quiet.
+    let idle = (!proxy::is_event_stream(resp.headers())).then_some(proxy::UPSTREAM_TIMEOUT);
+    let mut out = Response::new(Body::from_stream(proxy::redact_stream(resp.bytes_stream(), redactor, idle)));
     *out.status_mut() = status;
     *out.headers_mut() = resp_headers;
     out.headers_mut().append(

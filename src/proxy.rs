@@ -432,9 +432,9 @@ pub async fn send(
     }
     rb = target.auth.apply(rb, creds)?;
     let start = Instant::now();
-    let resp = rb
-        .send()
+    let resp = tokio::time::timeout(UPSTREAM_TIMEOUT, rb.send())
         .await
+        .map_err(|_| "the provider didn't start its reply within 3 minutes".to_string())?
         .map_err(|e| format!("upstream request failed: {}", without_url(&e)))?;
     // We asked for an uncompressed reply; a compressed one couldn't be checked
     // for an echoed key, so it isn't passed on.
@@ -581,10 +581,24 @@ impl Redactor {
     }
 
     /// Where a buffer can be cut so that no key form straddles the cut and
-    /// no partial form at the end is emitted early.
+    /// no partial form at the end is emitted early. Only a tail that could be
+    /// the start of a key is held back, so a streamed event that ends
+    /// normally goes out at once instead of waiting for the next chunk.
     fn safe_split(&self, buf: &[u8]) -> usize {
-        let hold = self.longest.saturating_sub(1);
-        let mut split = buf.len().saturating_sub(hold);
+        let mut split = buf.len();
+        for f in &self.forms {
+            let first = f[0];
+            for k in (1..f.len().min(buf.len() + 1)).rev() {
+                let at = buf.len() - k;
+                if at >= split {
+                    break;
+                }
+                if buf[at] == first && buf[at..] == f[..k] {
+                    split = at;
+                    break;
+                }
+            }
+        }
         for f in &self.forms {
             let mut from = 0;
             while let Some(i) = find(buf, f, from) {
@@ -599,8 +613,10 @@ impl Redactor {
 }
 
 /// Redacts a streamed body chunk by chunk, holding back just enough bytes to
-/// catch a key split across chunks.
-pub fn redact_stream<S>(upstream: S, r: Arc<Redactor>) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send
+/// catch a key split across chunks. `idle` ends the reply with an error when
+/// the provider sends nothing for that long; `None` (for event streams, which
+/// stay open between events) waits as long as the caller does.
+pub fn redact_stream<S>(upstream: S, r: Arc<Redactor>, idle: Option<Duration>) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send
 where
     S: Stream<Item = reqwest::Result<Bytes>> + Send + Unpin + 'static,
 {
@@ -611,7 +627,18 @@ where
                 return None;
             }
             loop {
-                match up.next().await {
+                let next = match idle {
+                    Some(d) => match tokio::time::timeout(d, up.next()).await {
+                        Ok(n) => n,
+                        Err(_) => {
+                            // What's held back may be part of a key: dropped, not sent.
+                            let e = std::io::Error::other("the provider sent nothing for too long");
+                            return Some((Err(e), (up, Vec::new(), true)));
+                        }
+                    },
+                    None => up.next().await,
+                };
+                match next {
                     Some(Ok(chunk)) => {
                         carry.extend_from_slice(&chunk);
                         let split = r.safe_split(&carry);
@@ -632,6 +659,18 @@ where
         }
     })
 }
+
+/// True for a server-sent event stream, which stays open between events.
+pub fn is_event_stream(h: &reqwest::header::HeaderMap) -> bool {
+    h.get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+/// How long a provider may take to start its reply, and to go quiet partway
+/// through one that isn't an event stream.
+pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// `%2F` -> `%2f`, leaving the rest alone.
 fn lower_hex(enc: &str) -> String {
@@ -875,12 +914,74 @@ mod tests {
         let body = format!("start {secret} middle {secret} end");
         // Split at every possible position into 3-byte chunks.
         let chunks: Vec<reqwest::Result<Bytes>> = body.as_bytes().chunks(3).map(|c| Ok(Bytes::copy_from_slice(c))).collect();
-        let out: Vec<u8> = redact_stream(futures_util::stream::iter(chunks), r)
+        let out: Vec<u8> = redact_stream(futures_util::stream::iter(chunks), r, None)
             .map(|c| c.unwrap().to_vec())
             .collect::<Vec<_>>()
             .await
             .concat();
         assert_eq!(String::from_utf8(out).unwrap(), "start [REDACTED] middle [REDACTED] end");
+    }
+
+    /// The first item of a stream that stays open after `chunks`.
+    async fn first_out(chunks: &[&str], r: Arc<Redactor>, idle: Option<Duration>) -> Option<Result<Bytes, std::io::Error>> {
+        let items: Vec<reqwest::Result<Bytes>> = chunks.iter().map(|c| Ok(Bytes::copy_from_slice(c.as_bytes()))).collect();
+        let up = futures_util::stream::iter(items).chain(futures_util::stream::pending());
+        let mut s = Box::pin(redact_stream(up, r, idle));
+        tokio::time::timeout(Duration::from_secs(2), s.next()).await.ok().flatten()
+    }
+
+    #[tokio::test]
+    async fn streamed_events_go_out_without_waiting_for_the_next_chunk() {
+        let secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let r = Arc::new(Redactor::new(&[secret]));
+        // A whole event goes out at once, though the stream stays open.
+        let out = first_out(&["data: {\"n\":1}\n\n"], r.clone(), None)
+            .await
+            .expect("event sent")
+            .unwrap();
+        assert_eq!(&out[..], b"data: {\"n\":1}\n\n");
+        // A tail that could start the key is held back, and only that tail.
+        let out = first_out(&["data: sk-ABC"], r.clone(), None).await.expect("sent").unwrap();
+        assert_eq!(&out[..], b"data: ");
+        // A key split across chunks is still caught.
+        let items: Vec<reqwest::Result<Bytes>> = ["data: sk-ABCDEFG", "HIJKLMNOPQRSTUVWXYZ0123456789 done\n\n"]
+            .iter()
+            .map(|c| Ok(Bytes::copy_from_slice(c.as_bytes())))
+            .collect();
+        let out: Vec<u8> = redact_stream(futures_util::stream::iter(items), r, None)
+            .map(|c| c.unwrap().to_vec())
+            .collect::<Vec<_>>()
+            .await
+            .concat();
+        assert_eq!(String::from_utf8(out).unwrap(), "data: [REDACTED] done\n\n");
+    }
+
+    #[tokio::test]
+    async fn a_quiet_reply_ends_unless_it_is_an_event_stream() {
+        let r = Arc::new(Redactor::new(&["sk-ABCDEFGHIJKLMNOP"]));
+        let items: Vec<reqwest::Result<Bytes>> = vec![Ok(Bytes::from_static(b"{\"partial\": sk-ABC"))];
+        let up = futures_util::stream::iter(items).chain(futures_util::stream::pending());
+        let mut s = Box::pin(redact_stream(up, r.clone(), Some(Duration::from_millis(50))));
+        assert_eq!(&s.next().await.unwrap().unwrap()[..], b"{\"partial\": ");
+        // The held-back start of the key is dropped, not sent.
+        assert!(s.next().await.unwrap().is_err());
+        assert!(s.next().await.is_none());
+        // With no idle limit the stream just waits.
+        let items: Vec<reqwest::Result<Bytes>> = vec![Ok(Bytes::from_static(b"data: 1\n\n"))];
+        let up = futures_util::stream::iter(items).chain(futures_util::stream::pending());
+        let mut s = Box::pin(redact_stream(up, r, None));
+        s.next().await.unwrap().unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(200), s.next()).await.is_err());
+    }
+
+    #[test]
+    fn event_streams_are_recognised() {
+        let mut h = reqwest::header::HeaderMap::new();
+        assert!(!is_event_stream(&h));
+        h.insert(reqwest::header::CONTENT_TYPE, "Text/Event-Stream; charset=utf-8".parse().unwrap());
+        assert!(is_event_stream(&h));
+        h.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        assert!(!is_event_stream(&h));
     }
 
     #[test]

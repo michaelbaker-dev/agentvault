@@ -255,10 +255,12 @@ async fn serve(cfg: Config) -> Result<(), String> {
     let db = Db::open(&cfg.db_path()).map_err(|e| format!("opening database: {e}"))?;
     let _ = std::fs::set_permissions(cfg.db_path(), std::fs::Permissions::from_mode(0o600));
 
+    // No read timeout here: proxied event streams stay open between events.
+    // Every use sets its own limit (the proxy in proxy::send and redact_stream,
+    // rotation and descriptions per request).
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(180))
         .user_agent(concat!("agentvault/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| format!("building HTTP client: {e}"))?;

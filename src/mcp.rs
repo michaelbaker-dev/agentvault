@@ -349,7 +349,8 @@ async fn proxy_tool(app: &AppRef, p: &Principal, args: &Value) -> (Value, Option
     // Read at most a little past the limit, so a huge body can't exhaust memory.
     let mut bytes = Vec::new();
     let mut truncated = false;
-    while let Ok(Some(chunk)) = resp.chunk().await {
+    // A reply that goes quiet (an event stream, say) ends what's shown here.
+    while let Ok(Ok(Some(chunk))) = tokio::time::timeout(proxy::UPSTREAM_TIMEOUT, resp.chunk()).await {
         bytes.extend_from_slice(&chunk);
         if bytes.len() > MAX_TOOL_BODY + 1024 {
             truncated = true;

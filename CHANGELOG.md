@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Streamed replies through the proxy arrive as they're sent.** The proxy used to hold back roughly a key's length at the end of every chunk, in case a key was split across two, so on a stream that stays open (server-sent events, hosted MCP servers) each event waited for the next one. It now holds back only bytes that could be the start of a key.
+- **Event streams aren't cut off when they go quiet.** A reply that is a server-sent event stream stays open as long as the caller keeps it; other replies still end after 3 minutes without data, and a provider still has 3 minutes to start its reply.
+
 - Anthropic keys starting `sk-ant-usr-` (106 characters) are recognised as Anthropic API keys, alongside `sk-ant-api03-`.
 - Google API keys get a provider check: listing Gemini models (free, read-only). A key Google doesn't know shows as rejected; one that's real but not allowed to use Gemini (restricted in Google Cloud, or the API isn't enabled) shows as restricted. Google's "API key not valid" answer (HTTP 400) now counts as rejected for any provider.
 - The key form's Details section names Service first, and Settings says where to find it.
